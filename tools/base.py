@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from agent_types import ToolResult
+from typing import Any
+from agent_types import ToolResult
 
 
 class Tool(ABC):
@@ -20,7 +18,7 @@ class Tool(ABC):
     def input_schema(self) -> dict: ...
 
     @abstractmethod
-    async def call(self, args: dict[str, Any], context: Any) -> "ToolResult": ...
+    async def call(self, args: dict[str, Any], context: Any) -> ToolResult: ...
 
     def is_read_only(self, args: dict[str, Any]) -> bool:
         return False
