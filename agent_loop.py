@@ -1,16 +1,21 @@
 import asyncio
+import os
 from typing import Any
 import anthropic
+from dotenv import load_dotenv
 from context import AgentContext
 from permissions import PermissionManager
 from agent_types import ToolResult, ToolUseBlock
+
+load_dotenv()
 
 
 class AgentLoop:
     def __init__(self, context: AgentContext, permission_manager: PermissionManager):
         self.context = context
         self.pm = permission_manager
-        self.client = anthropic.AsyncAnthropic()
+        self.model = os.environ.get("MODEL_ID", "claude-opus-4-5")
+        self.client = anthropic.AsyncAnthropic()  # reads ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL from env
         self._tool_map = {t.name: t for t in context.tools}
 
     async def run(self, user_message: str) -> str:
@@ -18,7 +23,7 @@ class AgentLoop:
 
         while True:
             response = await self.client.messages.create(
-                model="claude-opus-4-5",
+                model=self.model,
                 max_tokens=8096,
                 system=self.context.build_system_prompt(),
                 tools=[t.to_api_schema() for t in self.context.tools],
