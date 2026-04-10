@@ -1,11 +1,15 @@
 import asyncio
+import json
 import os
-from typing import Any
+from typing import Any, AsyncGenerator
 import anthropic
 from dotenv import load_dotenv
 from context import AgentContext
 from permissions import PermissionManager
-from agent_types import ToolResult, ToolUseBlock
+from agent_types import (
+    ToolResult, ToolUseBlock, StreamEvent,
+    TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
+)
 
 load_dotenv()
 
@@ -15,40 +19,78 @@ class AgentLoop:
         self.context = context
         self.pm = permission_manager
         self.model = os.environ.get("MODEL_ID", "claude-opus-4-5")
-        self.client = anthropic.AsyncAnthropic()  # reads ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL from env
+        self.client = anthropic.AsyncAnthropic()
         self._tool_map = {t.name: t for t in context.tools}
 
     async def run(self, user_message: str) -> str:
+        """Non-streaming convenience: collect full text and return."""
+        full_text = ""
+        async for event in self.run_stream(user_message):
+            match event:
+                case TurnComplete(text=text):
+                    full_text = text
+        return full_text
+
+    async def run_stream(self, user_message: str) -> AsyncGenerator[StreamEvent, None]:
+        """Core agent loop with streaming output."""
         self.context.messages.append({"role": "user", "content": user_message})
 
         while True:
-            response = await self.client.messages.create(
+            # --- Stream LLM response ---
+            assistant_content = []
+            tool_use_blocks: list[ToolUseBlock] = []
+            full_text = ""
+
+            async with self.client.messages.stream(
                 model=self.model,
                 max_tokens=8096,
                 system=self.context.build_system_prompt(),
                 tools=[t.to_api_schema() for t in self.context.tools],
                 messages=self.context.messages,
-            )
+            ) as stream:
+                async for event in stream:
+                    match event.type:
+                        case "text":
+                            full_text += event.text
+                            yield TextDelta(text=event.text)
 
-            # Append assistant message
-            assistant_content = [block.model_dump() for block in response.content]
+                        case "content_block_start":
+                            block = event.content_block
+                            if block.type == "tool_use":
+                                yield ToolUseStart(name=block.name, id=block.id)
+
+                        # input_json events are handled internally by SDK;
+                        # we collect final blocks from the accumulated message.
+
+                final_message = await stream.get_final_message()
+
+            # Build assistant content from the final accumulated message
+            assistant_content = [block.model_dump() for block in final_message.content]
             self.context.messages.append({"role": "assistant", "content": assistant_content})
 
-            if response.stop_reason != "tool_use":
-                # Extract final text response
-                for block in response.content:
-                    if block.type == "text":
-                        return block.text
-                return ""
-
-            # Execute tools
+            # Collect tool_use blocks
             tool_use_blocks = [
                 ToolUseBlock(id=b.id, name=b.name, input=b.input)
-                for b in response.content
+                for b in final_message.content
                 if b.type == "tool_use"
             ]
+
+            # No tool calls → done
+            if final_message.stop_reason != "tool_use":
+                yield TurnComplete(text=full_text)
+                return
+
+            # --- Execute tools ---
             tool_results = await self._execute_tools(tool_use_blocks)
 
+            # Yield execution results
+            for block, result in zip(tool_use_blocks, tool_results):
+                yield ToolExecResult(
+                    name=block.name, id=block.id,
+                    data=result.data, is_error=result.is_error,
+                )
+
+            # Append tool results to messages
             self.context.messages.append({
                 "role": "user",
                 "content": [

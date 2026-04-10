@@ -3,33 +3,82 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agent_loop import AgentLoop
 from context import AgentContext
 from permissions import PermissionManager
+from agent_types import (
+    ToolUseBlock, TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
+)
 from tools.bash import BashTool
 from tools.file_read import FileReadTool
 
 
-def make_text_response(text: str):
+# --- Helpers to build mock stream ---
+
+def _make_block(type_: str, **kwargs):
+    """Create a mock content block."""
     block = MagicMock()
-    block.type = "text"
-    block.text = text
-    block.model_dump.return_value = {"type": "text", "text": text}
-    response = MagicMock()
-    response.stop_reason = "end_turn"
-    response.content = [block]
-    return response
+    block.type = type_
+    for k, v in kwargs.items():
+        setattr(block, k, v)
+    block.model_dump.return_value = {"type": type_, **kwargs}
+    return block
 
 
-def make_tool_response(tool_name: str, tool_id: str, tool_input: dict):
-    block = MagicMock()
-    block.type = "tool_use"
-    block.id = tool_id
-    block.name = tool_name
-    block.input = tool_input
-    block.model_dump.return_value = {"type": "tool_use", "id": tool_id, "name": tool_name, "input": tool_input}
-    response = MagicMock()
-    response.stop_reason = "tool_use"
-    response.content = [block]
-    return response
+def _make_final_message(blocks, stop_reason="end_turn"):
+    msg = MagicMock()
+    msg.stop_reason = stop_reason
+    msg.content = blocks
+    return msg
 
+
+class MockStream:
+    """Simulate async iteration of SDK stream events + get_final_message()."""
+
+    def __init__(self, events, final_message):
+        self._events = events
+        self._final = final_message
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    def __aiter__(self):
+        return self._iter_events()
+
+    async def _iter_events(self):
+        for e in self._events:
+            yield e
+
+    async def get_final_message(self):
+        return self._final
+
+
+def make_text_stream(text: str):
+    """Stream that yields text deltas and resolves to a text-only final message."""
+    events = []
+    for ch in text:
+        ev = MagicMock()
+        ev.type = "text"
+        ev.text = ch
+        events.append(ev)
+    block = _make_block("text", text=text)
+    return MockStream(events, _make_final_message([block]))
+
+
+def make_tool_stream(tool_name: str, tool_id: str, tool_input: dict):
+    """Stream that yields a tool_use start event and resolves to a tool_use final message."""
+    start_ev = MagicMock()
+    start_ev.type = "content_block_start"
+    content_block = MagicMock()
+    content_block.type = "tool_use"
+    content_block.configure_mock(name=tool_name)
+    content_block.id = tool_id
+    start_ev.content_block = content_block
+    block = _make_block("tool_use", id=tool_id, name=tool_name, input=tool_input)
+    return MockStream([start_ev], _make_final_message([block], stop_reason="tool_use"))
+
+
+# --- Fixtures ---
 
 @pytest.fixture
 def ctx(tmp_path):
@@ -41,38 +90,61 @@ def pm():
     return PermissionManager()
 
 
+# --- Tests ---
+
 class TestAgentLoop:
     @pytest.mark.asyncio
     async def test_plain_text_response(self, ctx, pm):
         loop = AgentLoop(ctx, pm)
-        with patch.object(loop.client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.return_value = make_text_response("Hello!")
+        with patch.object(loop.client.messages, "stream", return_value=make_text_stream("Hello!")):
             result = await loop.run("hi")
         assert result == "Hello!"
         assert ctx.messages[-1]["role"] == "assistant"
 
     @pytest.mark.asyncio
+    async def test_stream_text_deltas(self, ctx, pm):
+        loop = AgentLoop(ctx, pm)
+        with patch.object(loop.client.messages, "stream", return_value=make_text_stream("AB")):
+            events = [e async for e in loop.run_stream("hi")]
+        text_deltas = [e for e in events if isinstance(e, TextDelta)]
+        assert len(text_deltas) == 2
+        assert text_deltas[0].text == "A"
+        assert text_deltas[1].text == "B"
+        assert isinstance(events[-1], TurnComplete)
+        assert events[-1].text == "AB"
+
+    @pytest.mark.asyncio
     async def test_single_tool_call(self, ctx, pm):
         loop = AgentLoop(ctx, pm)
-        tool_response = make_tool_response("Bash", "tu_1", {"command": "echo hi"})
-        final_response = make_text_response("Done")
-        with patch.object(loop.client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.side_effect = [tool_response, final_response]
+        tool_stream = make_tool_stream("Bash", "tu_1", {"command": "echo hi"})
+        final_stream = make_text_stream("Done")
+        with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
             result = await loop.run("run echo")
         assert result == "Done"
         # messages: user, assistant(tool_use), user(tool_result), assistant(text)
         assert len(ctx.messages) == 4
 
     @pytest.mark.asyncio
+    async def test_stream_tool_events(self, ctx, pm):
+        loop = AgentLoop(ctx, pm)
+        tool_stream = make_tool_stream("Bash", "tu_1", {"command": "echo hi"})
+        final_stream = make_text_stream("Done")
+        with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
+            events = [e async for e in loop.run_stream("run echo")]
+        tool_starts = [e for e in events if isinstance(e, ToolUseStart)]
+        tool_results = [e for e in events if isinstance(e, ToolExecResult)]
+        assert len(tool_starts) == 1
+        assert tool_starts[0].name == "Bash"
+        assert len(tool_results) == 1
+        assert not tool_results[0].is_error
+
+    @pytest.mark.asyncio
     async def test_permission_denied(self, ctx, pm):
         loop = AgentLoop(ctx, pm)
-        # FileWriteTool not in ctx, use Bash with dangerous command
-        tool_response = make_tool_response("Bash", "tu_1", {"command": "rm -rf /"})
-        final_response = make_text_response("Blocked")
-        with patch.object(loop.client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.side_effect = [tool_response, final_response]
+        tool_stream = make_tool_stream("Bash", "tu_1", {"command": "rm -rf /"})
+        final_stream = make_text_stream("Blocked")
+        with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
             result = await loop.run("delete everything")
-        # tool_result should contain permission denied error
         tool_result_msg = ctx.messages[2]
         assert tool_result_msg["role"] == "user"
         assert tool_result_msg["content"][0]["is_error"] is True
@@ -80,17 +152,15 @@ class TestAgentLoop:
     @pytest.mark.asyncio
     async def test_unknown_tool(self, ctx, pm):
         loop = AgentLoop(ctx, pm)
-        tool_response = make_tool_response("NonExistentTool", "tu_1", {})
-        final_response = make_text_response("ok")
-        with patch.object(loop.client.messages, "create", new_callable=AsyncMock) as mock_create:
-            mock_create.side_effect = [tool_response, final_response]
+        tool_stream = make_tool_stream("NonExistentTool", "tu_1", {})
+        final_stream = make_text_stream("ok")
+        with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
             await loop.run("use unknown tool")
         tool_result_msg = ctx.messages[2]
         assert "Unknown tool" in tool_result_msg["content"][0]["content"]
 
     def test_partition_safe_tools_batched(self, ctx, pm):
         loop = AgentLoop(ctx, pm)
-        from agent_types import ToolUseBlock
         blocks = [
             ToolUseBlock(id="1", name="Read", input={"file_path": "/a"}),
             ToolUseBlock(id="2", name="Read", input={"file_path": "/b"}),
@@ -99,6 +169,6 @@ class TestAgentLoop:
         ]
         batches = loop._partition(blocks)
         assert len(batches) == 3
-        assert len(batches[0]) == 2  # two reads batched
-        assert len(batches[1]) == 1  # unsafe bash alone
-        assert len(batches[2]) == 1  # trailing read alone
+        assert len(batches[0]) == 2
+        assert len(batches[1]) == 1
+        assert len(batches[2]) == 1
