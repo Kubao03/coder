@@ -159,6 +159,17 @@ async def handle_slash(agent: AgentLoop, cmd: str):
         print(f"  {YELLOW}Unknown command: {name}. Type /help for commands.{RESET}")
 
 
+def read_input() -> str:
+    """Read user input, supporting multi-line with trailing backslash."""
+    line = input(f"{BOLD}{GREEN}>{RESET} ")
+    lines = []
+    while line.endswith("\\"):
+        lines.append(line[:-1])
+        line = input(f"{DIM}.{RESET} ")
+    lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Coder Agent")
     parser.add_argument("--resume", nargs="?", const="__latest__", default=None,
@@ -210,7 +221,7 @@ async def repl():
 
     while True:
         try:
-            user_input = input(f"{BOLD}{GREEN}>{RESET} ").strip()
+            user_input = read_input()
         except (EOFError, KeyboardInterrupt):
             print(f"\n{DIM}Goodbye.{RESET}")
             break
