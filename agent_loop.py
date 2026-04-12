@@ -7,6 +7,7 @@ from context import AgentContext
 from permissions import PermissionManager
 from streaming_executor import StreamingToolExecutor
 from services.compact import auto_compact
+from session import SessionManager
 from agent_types import (
     ToolResult, ToolUseBlock, StreamEvent,
     TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
@@ -18,12 +19,24 @@ load_dotenv()
 class AgentLoop:
     """Core agent loop: call LLM → execute tools → repeat until done."""
 
-    def __init__(self, context: AgentContext, permission_manager: PermissionManager):
+    def __init__(
+        self,
+        context: AgentContext,
+        permission_manager: PermissionManager,
+        session: SessionManager | None = None,
+    ):
         self.context = context
         self.pm = permission_manager
+        self.session = session
         self.model = os.environ.get("MODEL_ID", "claude-opus-4-5")
         self.client = anthropic.AsyncAnthropic()
         self._tool_map = {t.name: t for t in context.tools}
+
+    def _append_message(self, message: dict) -> None:
+        """Append to context and persist to session file."""
+        self.context.messages.append(message)
+        if self.session:
+            self.session.record(message)
 
     async def run(self, user_message: str) -> str:
         """Non-streaming: collect full response text and return."""
@@ -36,7 +49,7 @@ class AgentLoop:
 
     async def run_stream(self, user_message: str) -> AsyncGenerator[StreamEvent, None]:
         """Streaming agent loop. Yields events as they arrive."""
-        self.context.messages.append({"role": "user", "content": user_message})
+        self._append_message({"role": "user", "content": user_message})
 
         while True:
             full_text = ""
@@ -81,7 +94,7 @@ class AgentLoop:
                 final_message = await stream.get_final_message()
 
             assistant_content = [b.model_dump() for b in final_message.content]
-            self.context.messages.append({"role": "assistant", "content": assistant_content})
+            self._append_message({"role": "assistant", "content": assistant_content})
 
             if final_message.stop_reason != "tool_use":
                 yield TurnComplete(text=full_text)
@@ -90,7 +103,7 @@ class AgentLoop:
             async for result_event in executor.get_results():
                 yield result_event
 
-            self.context.messages.append({
+            self._append_message({
                 "role": "user",
                 "content": [
                     {

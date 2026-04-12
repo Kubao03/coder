@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import os
 import shutil
@@ -5,6 +6,7 @@ from context import AgentContext
 from permissions import PermissionManager
 from agent_loop import AgentLoop
 from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete
+from session import SessionManager
 from services.compact import (
     auto_compact, estimate_tokens, compact_conversation,
     COMPACT_USER_PREFIX, _calculate_keep_index, _is_tool_result,
@@ -55,22 +57,23 @@ def truncate(text: str, max_lines: int = 15, max_chars: int = 800) -> str:
     return result
 
 
-def print_banner():
+def print_banner(session: SessionManager, resumed: bool = False):
     w = terminal_width()
     line = f"{GRAY}{'─' * w}{RESET}"
     print(line)
     print(f"  {BOLD}{CYAN}Coder Agent{RESET}  {DIM}— your AI coding assistant{RESET}")
     print(f"  {DIM}cwd: {os.getcwd()}{RESET}")
+    print(f"  {DIM}session: {session.session_id}{' (resumed)' if resumed else ''}{RESET}")
     print(line)
     print(f"  {DIM}Type a message to start. 'exit' to quit.{RESET}")
     print()
 
 
-def make_agent(cwd: str) -> AgentLoop:
+def make_agent(cwd: str, session: SessionManager) -> AgentLoop:
     tools = [BashTool(), FileReadTool(), FileEditTool(), FileWriteTool(), GlobTool(), GrepTool()]
     ctx = AgentContext(cwd=cwd, tools=tools)
     pm = PermissionManager()
-    return AgentLoop(ctx, pm)
+    return AgentLoop(ctx, pm, session=session)
 
 
 async def handle_message(agent: AgentLoop, user_input: str):
@@ -135,20 +138,75 @@ async def handle_slash(agent: AgentLoop, cmd: str):
         agent.context.messages.clear()
         print(f"  {DIM}Conversation cleared.{RESET}")
 
+    elif name == "/sessions":
+        cwd = os.getcwd()
+        sessions = SessionManager.list_sessions(cwd=cwd)
+        if not sessions:
+            print(f"  {DIM}No sessions found.{RESET}")
+        else:
+            for s in sessions[:10]:
+                ts = s["modified"].strftime("%m-%d %H:%M")
+                print(f"  {DIM}{s['id']}  {ts}  {s['preview']}{RESET}")
+
     elif name == "/help":
-        print(f"  {DIM}/compact  — Compress conversation via LLM summary{RESET}")
-        print(f"  {DIM}/tokens   — Show estimated token count{RESET}")
-        print(f"  {DIM}/clear    — Clear conversation history{RESET}")
-        print(f"  {DIM}/help     — Show this help{RESET}")
+        print(f"  {DIM}/compact   — Compress conversation via LLM summary{RESET}")
+        print(f"  {DIM}/tokens    — Show estimated token count{RESET}")
+        print(f"  {DIM}/sessions  — List recent sessions{RESET}")
+        print(f"  {DIM}/clear     — Clear conversation history{RESET}")
+        print(f"  {DIM}/help      — Show this help{RESET}")
 
     else:
         print(f"  {YELLOW}Unknown command: {name}. Type /help for commands.{RESET}")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Coder Agent")
+    parser.add_argument("--resume", nargs="?", const="__latest__", default=None,
+                        metavar="SESSION_ID",
+                        help="Resume a session (latest if no ID given)")
+    parser.add_argument("--list", action="store_true",
+                        help="List recent sessions and exit")
+    return parser.parse_args()
+
+
 async def repl():
+    args = parse_args()
     cwd = os.getcwd()
-    agent = make_agent(cwd)
-    print_banner()
+
+    if args.list:
+        sessions = SessionManager.list_sessions(cwd=cwd)
+        if not sessions:
+            print(f"{DIM}No sessions found.{RESET}")
+        else:
+            for s in sessions[:20]:
+                ts = s["modified"].strftime("%Y-%m-%d %H:%M")
+                print(f"  {s['id']}  {ts}  {s['preview']}")
+        return
+
+    resumed = False
+    if args.resume:
+        if args.resume == "__latest__":
+            session = SessionManager.find_latest(cwd)
+            if not session:
+                print(f"{YELLOW}No session to resume.{RESET}")
+                return
+        else:
+            session = SessionManager(session_id=args.resume, cwd=cwd)
+            if not session.path.exists():
+                print(f"{RED}Session not found: {args.resume}{RESET}")
+                return
+        resumed = True
+    else:
+        session = SessionManager(cwd=cwd)
+
+    agent = make_agent(cwd, session)
+
+    if resumed:
+        agent.context.messages = session.load()
+        msg_count = len(agent.context.messages)
+        print(f"  {GREEN}Restored {msg_count} messages from session {session.session_id}{RESET}")
+
+    print_banner(session, resumed=resumed)
 
     while True:
         try:
