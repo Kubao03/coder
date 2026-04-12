@@ -1,6 +1,6 @@
 import asyncio
 import os
-import sys
+import shutil
 from context import AgentContext
 from permissions import PermissionManager
 from agent_loop import AgentLoop
@@ -12,12 +12,52 @@ from tools.file_write import FileWriteTool
 from tools.glob_tool import GlobTool
 from tools.grep_tool import GrepTool
 
-# --- ANSI colors ---
-BLUE = "\033[34m"
-GRAY = "\033[90m"
-RED = "\033[31m"
+# --- ANSI styles ---
 RESET = "\033[0m"
 BOLD = "\033[1m"
+DIM = "\033[2m"
+BLUE = "\033[34m"
+CYAN = "\033[36m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+GRAY = "\033[90m"
+MAGENTA = "\033[35m"
+
+
+def terminal_width() -> int:
+    return shutil.get_terminal_size((80, 24)).columns
+
+
+def separator() -> str:
+    return f"{GRAY}{'─' * terminal_width()}{RESET}"
+
+
+def truncate(text: str, max_lines: int = 15, max_chars: int = 800) -> str:
+    if len(text) > max_chars:
+        text = text[:max_chars]
+        truncated = True
+    else:
+        truncated = False
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        truncated = True
+    result = "\n".join(lines)
+    if truncated:
+        result += f"\n{DIM}... (truncated){RESET}"
+    return result
+
+
+def print_banner():
+    w = terminal_width()
+    line = f"{GRAY}{'─' * w}{RESET}"
+    print(line)
+    print(f"  {BOLD}{CYAN}Coder Agent{RESET}  {DIM}— your AI coding assistant{RESET}")
+    print(f"  {DIM}cwd: {os.getcwd()}{RESET}")
+    print(line)
+    print(f"  {DIM}Type a message to start. 'exit' to quit.{RESET}")
+    print()
 
 
 def make_agent(cwd: str) -> AgentLoop:
@@ -28,7 +68,6 @@ def make_agent(cwd: str) -> AgentLoop:
 
 
 async def handle_message(agent: AgentLoop, user_input: str):
-    """Stream agent response to terminal."""
     in_text = False
     async for event in agent.run_stream(user_input):
         match event:
@@ -37,17 +76,17 @@ async def handle_message(agent: AgentLoop, user_input: str):
                     in_text = True
                 print(text, end="", flush=True)
 
-            case ToolUseStart(name=name, id=tid):
+            case ToolUseStart(name=name):
                 if in_text:
                     print()
                     in_text = False
-                print(f"{BLUE}{BOLD}[{name}]{RESET}", flush=True)
+                print(f"  {MAGENTA}{name}{RESET}")
 
-            case ToolExecResult(name=name, data=data, is_error=is_error):
-                color = RED if is_error else GRAY
-                # Show truncated result
-                preview = data[:500] + ("..." if len(data) > 500 else "")
-                print(f"{color}{preview}{RESET}", flush=True)
+            case ToolExecResult(data=data, is_error=is_error):
+                color = RED if is_error else DIM
+                preview = truncate(data)
+                for line in preview.splitlines():
+                    print(f"  {color}{line}{RESET}")
 
             case TurnComplete():
                 if in_text:
@@ -57,29 +96,30 @@ async def handle_message(agent: AgentLoop, user_input: str):
 async def repl():
     cwd = os.getcwd()
     agent = make_agent(cwd)
-    print(f"{BOLD}Code Agent ready.{RESET} cwd: {cwd}")
-    print("Type your message, or 'exit' to quit.\n")
+    print_banner()
 
     while True:
         try:
-            user_input = input(f"{BOLD}>{RESET} ").strip()
+            user_input = input(f"{BOLD}{GREEN}>{RESET} ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nBye.")
+            print(f"\n{DIM}Goodbye.{RESET}")
             break
 
         if not user_input:
             continue
         if user_input.lower() in ("exit", "quit"):
-            print("Bye.")
+            print(f"{DIM}Goodbye.{RESET}")
             break
 
+        print()
         try:
             await handle_message(agent, user_input)
             print()
         except KeyboardInterrupt:
-            print("\n[interrupted]")
+            print(f"\n{YELLOW}[interrupted]{RESET}\n")
         except Exception as e:
-            print(f"{RED}[error] {e}{RESET}")
+            print(f"\n{RED}Error: {e}{RESET}\n")
+        print(separator())
 
 
 if __name__ == "__main__":
