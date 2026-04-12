@@ -5,6 +5,7 @@ from context import AgentContext
 from permissions import PermissionManager
 from agent_loop import AgentLoop
 from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete
+from services.compact import auto_compact, estimate_tokens, compact_conversation, COMPACT_USER_PREFIX
 from tools.bash import BashTool
 from tools.file_read import FileReadTool
 from tools.file_edit import FileEditTool
@@ -93,6 +94,44 @@ async def handle_message(agent: AgentLoop, user_input: str):
                     print()
 
 
+async def handle_slash(agent: AgentLoop, cmd: str):
+    parts = cmd.strip().split()
+    name = parts[0].lower()
+
+    if name == "/compact":
+        ctx = agent.context
+        tokens = estimate_tokens(ctx.messages, ctx.build_system_prompt())
+        print(f"  {DIM}Current tokens (est): {tokens}{RESET}")
+        print(f"  {DIM}Compacting...{RESET}")
+        try:
+            summary = await compact_conversation(
+                agent.client, agent.model, ctx.messages, ctx.build_system_prompt(),
+            )
+            ctx.messages = [{"role": "user", "content": COMPACT_USER_PREFIX + summary}]
+            new_tokens = estimate_tokens(ctx.messages, ctx.build_system_prompt())
+            print(f"  {GREEN}Compacted: {tokens} -> {new_tokens} tokens{RESET}")
+        except Exception as e:
+            print(f"  {RED}Compact failed: {e}{RESET}")
+
+    elif name == "/tokens":
+        ctx = agent.context
+        tokens = estimate_tokens(ctx.messages, ctx.build_system_prompt())
+        print(f"  {DIM}Messages: {len(ctx.messages)}, Tokens (est): {tokens}{RESET}")
+
+    elif name == "/clear":
+        agent.context.messages.clear()
+        print(f"  {DIM}Conversation cleared.{RESET}")
+
+    elif name == "/help":
+        print(f"  {DIM}/compact  — Compress conversation via LLM summary{RESET}")
+        print(f"  {DIM}/tokens   — Show estimated token count{RESET}")
+        print(f"  {DIM}/clear    — Clear conversation history{RESET}")
+        print(f"  {DIM}/help     — Show this help{RESET}")
+
+    else:
+        print(f"  {YELLOW}Unknown command: {name}. Type /help for commands.{RESET}")
+
+
 async def repl():
     cwd = os.getcwd()
     agent = make_agent(cwd)
@@ -110,6 +149,11 @@ async def repl():
         if user_input.lower() in ("exit", "quit"):
             print(f"{DIM}Goodbye.{RESET}")
             break
+
+        if user_input.startswith("/"):
+            await handle_slash(agent, user_input)
+            print(separator())
+            continue
 
         print()
         try:

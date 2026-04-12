@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from context import AgentContext
 from permissions import PermissionManager
 from streaming_executor import StreamingToolExecutor
+from services.compact import auto_compact
 from agent_types import (
     ToolResult, ToolUseBlock, StreamEvent,
     TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
@@ -107,4 +108,10 @@ class AgentLoop:
                 ],
             })
 
-            self.context.compact_messages()
+            compacted = await auto_compact(
+                self.client, self.model,
+                self.context.messages,
+                self.context.build_system_prompt(),
+            )
+            if compacted is not None:
+                self.context.messages = compacted
