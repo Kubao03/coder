@@ -25,27 +25,3 @@ class AgentContext:
 
         return "\n".join(parts)
 
-    def compact_messages(self, max_messages: int = 40) -> None:
-        """Snip oldest messages, always leaving history in a valid state.
-
-        A valid history must start with a plain user message (not tool_results),
-        because tool_results reference tool_use IDs that must exist in the
-        preceding assistant message.
-        """
-        while len(self.messages) > max_messages:
-            self.messages.pop(0)
-            # Keep removing until the new head is a plain user message.
-            # A tool_result user message references tool_use IDs from the
-            # assistant message we just removed — keep it and the API errors.
-            while self.messages and self._is_tool_result(self.messages[0]):
-                self.messages.pop(0)
-
-    @staticmethod
-    def _is_tool_result(message: dict) -> bool:
-        """Return True if this is a user message containing tool_results."""
-        if message.get("role") != "user":
-            return False
-        content = message.get("content", "")
-        if isinstance(content, list) and content:
-            return content[0].get("type") == "tool_result"
-        return False

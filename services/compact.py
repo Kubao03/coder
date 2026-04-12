@@ -82,6 +82,11 @@ async def compact_conversation(
     return format_compact_summary(raw)
 
 
+MIN_KEEP_TOKENS = 10_000
+MIN_KEEP_TEXT_MESSAGES = 3
+MAX_KEEP_TOKENS = 40_000
+
+
 async def auto_compact(
     client: anthropic.AsyncAnthropic,
     model: str,
@@ -90,22 +95,82 @@ async def auto_compact(
     context_window: int = 200_000,
     threshold_ratio: float = 0.85,
 ) -> list[dict[str, Any]] | None:
+    messages = micro_compact(messages)
+
     token_est = estimate_tokens(messages, system_prompt)
     threshold = int(context_window * threshold_ratio)
 
     if token_est < threshold:
         return None
 
-    summary = await compact_conversation(client, model, messages, system_prompt)
+    keep_idx = _calculate_keep_index(messages)
+    to_summarize = messages[:keep_idx]
+    to_keep = messages[keep_idx:]
+
+    if not to_summarize:
+        return None
+
+    summary = await compact_conversation(client, model, to_summarize, system_prompt)
 
     summary_message = COMPACT_USER_PREFIX + summary
 
-    keep_recent = 4
-    recent = messages[-keep_recent:] if len(messages) > keep_recent else []
-    while recent and _is_tool_result(recent[0]):
-        recent.pop(0)
+    # Ensure first kept message is not a tool_result (API invariant)
+    while to_keep and _is_tool_result(to_keep[0]):
+        to_keep.pop(0)
 
-    return [{"role": "user", "content": summary_message}] + recent
+    return [{"role": "user", "content": summary_message}] + to_keep
+
+
+def _calculate_keep_index(messages: list[dict[str, Any]]) -> int:
+    """Find the split point: messages[:idx] get summarized, messages[idx:] are kept.
+
+    Expands backwards from end until BOTH minimums are met:
+    - At least MIN_KEEP_TOKENS tokens
+    - At least MIN_KEEP_TEXT_MESSAGES messages with text content
+    Stops expanding if MAX_KEEP_TOKENS is reached.
+    Also avoids splitting tool_use / tool_result pairs.
+    """
+    if not messages:
+        return 0
+
+    total_tokens = 0
+    text_msg_count = 0
+    start_idx = len(messages)
+
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        msg_tokens = estimate_tokens([msg])
+        total_tokens += msg_tokens
+        if _has_text_content(msg):
+            text_msg_count += 1
+
+        start_idx = i
+
+        if total_tokens >= MAX_KEEP_TOKENS:
+            break
+
+        if (total_tokens >= MIN_KEEP_TOKENS
+                and text_msg_count >= MIN_KEEP_TEXT_MESSAGES):
+            break
+
+    # Don't split a tool_use / tool_result pair: if start_idx points at a
+    # tool_result message, include the preceding assistant (tool_use) too.
+    if start_idx > 0 and _is_tool_result(messages[start_idx]):
+        start_idx -= 1
+
+    return start_idx
+
+
+def _has_text_content(message: dict) -> bool:
+    """Check if a message contains actual text (not just tool results)."""
+    content = message.get("content", "")
+    if isinstance(content, str) and content:
+        return True
+    if isinstance(content, list):
+        return any(
+            b.get("type") == "text" for b in content if isinstance(b, dict)
+        )
+    return False
 
 
 def _is_tool_result(message: dict) -> bool:
@@ -115,3 +180,65 @@ def _is_tool_result(message: dict) -> bool:
     if isinstance(content, list) and content:
         return content[0].get("type") == "tool_result"
     return False
+
+
+# ---------------------------------------------------------------------------
+# Micro-compact: trim oversized / stale tool results before LLM compaction
+# ---------------------------------------------------------------------------
+
+MAX_TOOL_RESULT_CHARS = 50_000
+STALE_TRIM_CHARS = 500
+STALE_TURN_THRESHOLD = 10
+CLEARED_MESSAGE = "[Old tool result content cleared]"
+
+
+def micro_compact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Trim oversized and stale tool results in-place-style (returns new list).
+
+    Two passes:
+    1. Any tool result > MAX_TOOL_RESULT_CHARS → keep head preview + truncation notice.
+    2. Tool results older than STALE_TURN_THRESHOLD turns → shrink to STALE_TRIM_CHARS.
+    """
+    total = len(messages)
+    result = []
+    for idx, msg in enumerate(messages):
+        if not _is_tool_result(msg):
+            result.append(msg)
+            continue
+
+        turns_from_end = total - idx
+        new_content = []
+        changed = False
+        for block in msg["content"]:
+            if block.get("type") != "tool_result":
+                new_content.append(block)
+                continue
+
+            data = block.get("content", "")
+            if not isinstance(data, str):
+                new_content.append(block)
+                continue
+
+            if turns_from_end > STALE_TURN_THRESHOLD and len(data) > STALE_TRIM_CHARS:
+                new_content.append({
+                    **block,
+                    "content": CLEARED_MESSAGE,
+                })
+                changed = True
+            elif len(data) > MAX_TOOL_RESULT_CHARS:
+                preview = data[:2000]
+                notice = f"\n[Result truncated, {len(data)} chars total. Use Read tool to see full content.]"
+                new_content.append({
+                    **block,
+                    "content": preview + notice,
+                })
+                changed = True
+            else:
+                new_content.append(block)
+
+        if changed:
+            result.append({**msg, "content": new_content})
+        else:
+            result.append(msg)
+
+    return result

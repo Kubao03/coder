@@ -5,7 +5,10 @@ from context import AgentContext
 from permissions import PermissionManager
 from agent_loop import AgentLoop
 from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete
-from services.compact import auto_compact, estimate_tokens, compact_conversation, COMPACT_USER_PREFIX
+from services.compact import (
+    auto_compact, estimate_tokens, compact_conversation,
+    COMPACT_USER_PREFIX, _calculate_keep_index, _is_tool_result,
+)
 from tools.bash import BashTool
 from tools.file_read import FileReadTool
 from tools.file_edit import FileEditTool
@@ -104,10 +107,18 @@ async def handle_slash(agent: AgentLoop, cmd: str):
         print(f"  {DIM}Current tokens (est): {tokens}{RESET}")
         print(f"  {DIM}Compacting...{RESET}")
         try:
+            keep_idx = _calculate_keep_index(ctx.messages)
+            to_summarize = ctx.messages[:keep_idx]
+            to_keep = ctx.messages[keep_idx:]
+            if not to_summarize:
+                to_summarize = ctx.messages
+                to_keep = []
             summary = await compact_conversation(
-                agent.client, agent.model, ctx.messages, ctx.build_system_prompt(),
+                agent.client, agent.model, to_summarize, ctx.build_system_prompt(),
             )
-            ctx.messages = [{"role": "user", "content": COMPACT_USER_PREFIX + summary}]
+            while to_keep and _is_tool_result(to_keep[0]):
+                to_keep.pop(0)
+            ctx.messages = [{"role": "user", "content": COMPACT_USER_PREFIX + summary}] + to_keep
             new_tokens = estimate_tokens(ctx.messages, ctx.build_system_prompt())
             print(f"  {GREEN}Compacted: {tokens} -> {new_tokens} tokens{RESET}")
         except Exception as e:
