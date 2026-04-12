@@ -40,6 +40,7 @@ COMPACT_USER_PREFIX = """This session is being continued from a previous convers
 
 
 def estimate_tokens(messages: list[dict], system: str = "") -> int:
+    """Rough token estimate (~4 chars per token)."""
     total = len(system) // 4
     for msg in messages:
         content = msg.get("content", "")
@@ -55,6 +56,7 @@ def estimate_tokens(messages: list[dict], system: str = "") -> int:
 
 
 def format_compact_summary(raw: str) -> str:
+    """Strip <analysis> tags, extract <summary> content, collapse whitespace."""
     result = re.sub(r"<analysis>[\s\S]*?</analysis>", "", raw)
     match = re.search(r"<summary>([\s\S]*?)</summary>", result)
     if match:
@@ -70,6 +72,7 @@ async def compact_conversation(
     messages: list[dict[str, Any]],
     system_prompt: str,
 ) -> str:
+    """Call the LLM to summarize messages into a compact summary."""
     async with client.messages.stream(
         model=model,
         max_tokens=20000,
@@ -81,6 +84,10 @@ async def compact_conversation(
     raw = next((b.text for b in final.content if b.type == "text"), "")
     return format_compact_summary(raw)
 
+
+# ---------------------------------------------------------------------------
+# Dynamic context retention thresholds
+# ---------------------------------------------------------------------------
 
 MIN_KEEP_TOKENS = 10_000
 MIN_KEEP_TEXT_MESSAGES = 3
@@ -95,6 +102,10 @@ async def auto_compact(
     context_window: int = 200_000,
     threshold_ratio: float = 0.85,
 ) -> list[dict[str, Any]] | None:
+    """Auto-compact when estimated tokens exceed threshold.
+
+    Returns compacted message list, or None if under threshold.
+    """
     messages = micro_compact(messages)
 
     token_est = estimate_tokens(messages, system_prompt)
@@ -114,7 +125,6 @@ async def auto_compact(
 
     summary_message = COMPACT_USER_PREFIX + summary
 
-    # Ensure first kept message is not a tool_result (API invariant)
     while to_keep and _is_tool_result(to_keep[0]):
         to_keep.pop(0)
 
@@ -174,6 +184,7 @@ def _has_text_content(message: dict) -> bool:
 
 
 def _is_tool_result(message: dict) -> bool:
+    """Check if a message is a user message containing tool_result blocks."""
     if message.get("role") != "user":
         return False
     content = message.get("content", "")
@@ -193,11 +204,10 @@ CLEARED_MESSAGE = "[Old tool result content cleared]"
 
 
 def micro_compact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Trim oversized and stale tool results in-place-style (returns new list).
+    """Trim oversized and stale tool results (returns new list).
 
-    Two passes:
-    1. Any tool result > MAX_TOOL_RESULT_CHARS → keep head preview + truncation notice.
-    2. Tool results older than STALE_TURN_THRESHOLD turns → shrink to STALE_TRIM_CHARS.
+    - Oversized (> MAX_TOOL_RESULT_CHARS): keep 2K preview + truncation notice.
+    - Stale (> STALE_TURN_THRESHOLD turns old): replace with cleared message.
     """
     total = len(messages)
     result = []

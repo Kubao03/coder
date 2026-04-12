@@ -17,17 +17,19 @@ class ToolUseBlock:
     input: dict[str, Any]
 
 
-# --- Stream events yielded by AgentLoop.run_stream() ---
+# ---------------------------------------------------------------------------
+# Stream events yielded by AgentLoop.run_stream()
+# ---------------------------------------------------------------------------
 
 @dataclass
 class TextDelta:
-    """Incremental text from LLM."""
+    """Incremental text from the LLM."""
     text: str
 
 
 @dataclass
 class ToolUseStart:
-    """LLM has started a tool call."""
+    """The LLM has started a tool call."""
     name: str
     id: str
 
@@ -44,7 +46,7 @@ class ToolExecResult:
 @dataclass
 class TurnComplete:
     """Agent turn is complete (no more tool calls)."""
-    text: str  # full accumulated text of the final response
+    text: str
 
 
 StreamEvent = TextDelta | ToolUseStart | ToolExecResult | TurnComplete

@@ -5,26 +5,24 @@ ALWAYS_ALLOW = ("Read", "Glob", "Grep")
 
 
 class PermissionManager:
+    """Three-tier permission check: deny → auto-allow → ask user."""
+
     def __init__(self):
         self._session_allowed: set[str] = set()
 
     def check(self, tool: Tool, args: dict) -> tuple[bool, str]:
-        """Return (allowed, reason). Does NOT prompt — purely decision logic."""
-        # 1. Always deny dangerous commands
+        """Return (allowed, reason). Does not prompt the user."""
         if tool.name == "Bash":
             cmd = args.get("command", "")
             if any(cmd.strip().startswith(d) for d in ALWAYS_DENY):
                 return False, "denied: dangerous command"
 
-        # 2. Always allow safe tools
         if tool.name in ALWAYS_ALLOW:
             return True, "auto-allowed: read-only tool"
 
-        # 3. Read-only operations
         if tool.is_read_only(args):
             return True, "auto-allowed: read-only"
 
-        # 4. Session-level approval
         key = _session_key(tool, args)
         if key in self._session_allowed:
             return True, "auto-allowed: session approval"
@@ -32,7 +30,7 @@ class PermissionManager:
         return None, "needs confirmation"
 
     def ask(self, tool: Tool, args: dict) -> bool:
-        """Prompt the user and return whether to allow. Updates session state."""
+        """Prompt the user for permission. Updates session state on 'always'."""
         print(f"\nAllow {tool.name}({args})? [y]es / [a]lways / [n]o: ", end="", flush=True)
         response = input().strip().lower()
         if response == "a":
@@ -41,7 +39,7 @@ class PermissionManager:
         return response == "y"
 
     def is_allowed(self, tool: Tool, args: dict) -> bool:
-        """Full permission check including user prompt if needed."""
+        """Full check: auto-decide or ask the user."""
         allowed, _ = self.check(tool, args)
         if allowed is True:
             return True

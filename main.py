@@ -16,7 +16,9 @@ from tools.file_write import FileWriteTool
 from tools.glob_tool import GlobTool
 from tools.grep_tool import GrepTool
 
-# --- ANSI styles ---
+# ---------------------------------------------------------------------------
+# ANSI styles
+# ---------------------------------------------------------------------------
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"

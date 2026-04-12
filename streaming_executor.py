@@ -9,6 +9,7 @@ from permissions import PermissionManager
 
 @dataclass
 class TrackedTool:
+    """Internal state for a single tool invocation."""
     block: ToolUseBlock
     is_concurrent_safe: bool
     status: str = "queued"  # queued → executing → completed
@@ -19,13 +20,7 @@ class TrackedTool:
 class StreamingToolExecutor:
     """Execute tools as they arrive during LLM streaming.
 
-    Usage:
-        executor = StreamingToolExecutor(tool_map, pm, context)
-        # During streaming, as each tool_use block completes:
-        executor.add_tool(block)
-        # After streaming ends:
-        async for event in executor.get_results():
-            yield event
+    Concurrent-safe tools run in parallel; non-safe tools block the queue.
     """
 
     def __init__(self, tool_map: dict[str, Tool], pm: PermissionManager, context):

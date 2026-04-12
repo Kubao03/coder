@@ -6,11 +6,14 @@ from tools.base import Tool
 
 @dataclass
 class AgentContext:
+    """Agent state: working directory, tools, and conversation history."""
+
     cwd: str
     tools: list[Tool]
     messages: list[dict[str, Any]] = field(default_factory=list)
 
     def build_system_prompt(self) -> str:
+        """Assemble the system prompt with cwd, CODER.md, and tool list."""
         parts = [
             "You are a coding agent. You help users with software engineering tasks.",
             f"\nCurrent working directory: {self.cwd}",
