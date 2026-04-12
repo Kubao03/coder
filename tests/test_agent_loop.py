@@ -35,6 +35,7 @@ class MockStream:
     def __init__(self, events, final_message):
         self._events = events
         self._final = final_message
+        self.current_message_snapshot = final_message
 
     async def __aenter__(self):
         return self
@@ -66,16 +67,22 @@ def make_text_stream(text: str):
 
 
 def make_tool_stream(tool_name: str, tool_id: str, tool_input: dict):
-    """Stream that yields a tool_use start event and resolves to a tool_use final message."""
+    """Stream that yields a tool_use start + stop event and resolves to a tool_use final message."""
     start_ev = MagicMock()
     start_ev.type = "content_block_start"
+    start_ev.index = 0
     content_block = MagicMock()
     content_block.type = "tool_use"
     content_block.configure_mock(name=tool_name)
     content_block.id = tool_id
     start_ev.content_block = content_block
+
+    stop_ev = MagicMock()
+    stop_ev.type = "content_block_stop"
+    stop_ev.index = 0
+
     block = _make_block("tool_use", id=tool_id, name=tool_name, input=tool_input)
-    return MockStream([start_ev], _make_final_message([block], stop_reason="tool_use"))
+    return MockStream([start_ev, stop_ev], _make_final_message([block], stop_reason="tool_use"))
 
 
 # --- Fixtures ---
@@ -159,16 +166,3 @@ class TestAgentLoop:
         tool_result_msg = ctx.messages[2]
         assert "Unknown tool" in tool_result_msg["content"][0]["content"]
 
-    def test_partition_safe_tools_batched(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
-        blocks = [
-            ToolUseBlock(id="1", name="Read", input={"file_path": "/a"}),
-            ToolUseBlock(id="2", name="Read", input={"file_path": "/b"}),
-            ToolUseBlock(id="3", name="Bash", input={"command": "rm file"}),
-            ToolUseBlock(id="4", name="Read", input={"file_path": "/c"}),
-        ]
-        batches = loop._partition(blocks)
-        assert len(batches) == 3
-        assert len(batches[0]) == 2
-        assert len(batches[1]) == 1
-        assert len(batches[2]) == 1

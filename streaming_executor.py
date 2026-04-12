@@ -1,0 +1,94 @@
+import asyncio
+from dataclasses import dataclass, field
+from typing import AsyncGenerator
+
+from agent_types import ToolResult, ToolUseBlock, ToolExecResult
+from tools.base import Tool
+from permissions import PermissionManager
+
+
+@dataclass
+class TrackedTool:
+    block: ToolUseBlock
+    is_concurrent_safe: bool
+    status: str = "queued"  # queued → executing → completed
+    result: ToolResult | None = None
+    task: asyncio.Task | None = None
+
+
+class StreamingToolExecutor:
+    """Execute tools as they arrive during LLM streaming.
+
+    Usage:
+        executor = StreamingToolExecutor(tool_map, pm, context)
+        # During streaming, as each tool_use block completes:
+        executor.add_tool(block)
+        # After streaming ends:
+        async for event in executor.get_results():
+            yield event
+    """
+
+    def __init__(self, tool_map: dict[str, Tool], pm: PermissionManager, context):
+        self._tool_map = tool_map
+        self._pm = pm
+        self._context = context
+        self._tools: list[TrackedTool] = []
+        self._done_event = asyncio.Event()
+
+    def add_tool(self, block: ToolUseBlock):
+        tool = self._tool_map.get(block.name)
+        safe = tool.is_concurrent_safe(block.input) if tool else False
+        tracked = TrackedTool(block=block, is_concurrent_safe=safe)
+        self._tools.append(tracked)
+        self._try_execute()
+
+    def _can_execute(self, candidate: TrackedTool) -> bool:
+        executing = [t for t in self._tools if t.status == "executing"]
+        if not executing:
+            return True
+        if candidate.is_concurrent_safe and all(t.is_concurrent_safe for t in executing):
+            return True
+        return False
+
+    def _try_execute(self):
+        for tracked in self._tools:
+            if tracked.status != "queued":
+                continue
+            if self._can_execute(tracked):
+                tracked.status = "executing"
+                tracked.task = asyncio.create_task(self._run(tracked))
+            elif not tracked.is_concurrent_safe:
+                break
+
+    async def _run(self, tracked: TrackedTool):
+        tool = self._tool_map.get(tracked.block.name)
+        if tool is None:
+            tracked.result = ToolResult(data=f"Unknown tool: {tracked.block.name}", is_error=True)
+        elif not self._pm.is_allowed(tool, tracked.block.input):
+            tracked.result = ToolResult(data=f"Permission denied for {tracked.block.name}", is_error=True)
+        else:
+            tracked.result = await tool.call(tracked.block.input, self._context)
+        tracked.status = "completed"
+        self._done_event.set()
+        self._try_execute()
+
+    async def get_results(self) -> AsyncGenerator[ToolExecResult, None]:
+        """Wait for all tools to complete, yielding results in order."""
+        idx = 0
+        while idx < len(self._tools):
+            tracked = self._tools[idx]
+            if tracked.status == "completed":
+                yield ToolExecResult(
+                    name=tracked.block.name,
+                    id=tracked.block.id,
+                    data=tracked.result.data,
+                    is_error=tracked.result.is_error,
+                )
+                idx += 1
+            else:
+                self._done_event.clear()
+                await self._done_event.wait()
+
+    def get_tool_results(self) -> list[tuple[ToolUseBlock, ToolResult]]:
+        """Return ordered (block, result) pairs after all tools complete."""
+        return [(t.block, t.result) for t in self._tools]

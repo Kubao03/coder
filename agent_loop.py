@@ -1,11 +1,11 @@
 import asyncio
-import json
 import os
 from typing import Any, AsyncGenerator
 import anthropic
 from dotenv import load_dotenv
 from context import AgentContext
 from permissions import PermissionManager
+from streaming_executor import StreamingToolExecutor
 from agent_types import (
     ToolResult, ToolUseBlock, StreamEvent,
     TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
@@ -36,10 +36,12 @@ class AgentLoop:
         self.context.messages.append({"role": "user", "content": user_message})
 
         while True:
-            # --- Stream LLM response ---
-            assistant_content = []
-            tool_use_blocks: list[ToolUseBlock] = []
             full_text = ""
+            executor = StreamingToolExecutor(self._tool_map, self.pm, self.context)
+
+            # Track tool_use blocks being streamed so we can feed them
+            # to the executor the moment they are complete.
+            pending_tool_blocks: dict[int, dict] = {}  # index → partial info
 
             async with self.client.messages.stream(
                 model=self.model,
@@ -57,38 +59,39 @@ class AgentLoop:
                         case "content_block_start":
                             block = event.content_block
                             if block.type == "tool_use":
+                                pending_tool_blocks[event.index] = {
+                                    "id": block.id,
+                                    "name": block.name,
+                                }
                                 yield ToolUseStart(name=block.name, id=block.id)
 
-                        # input_json events are handled internally by SDK;
-                        # we collect final blocks from the accumulated message.
+                        case "content_block_stop":
+                            if event.index in pending_tool_blocks:
+                                info = pending_tool_blocks.pop(event.index)
+                                # Get the fully accumulated block from the stream's snapshot
+                                snapshot = stream.current_message_snapshot
+                                for b in snapshot.content:
+                                    if b.type == "tool_use" and b.id == info["id"]:
+                                        block = ToolUseBlock(
+                                            id=b.id, name=b.name, input=b.input,
+                                        )
+                                        executor.add_tool(block)
+                                        break
 
                 final_message = await stream.get_final_message()
 
-            # Build assistant content from the final accumulated message
-            assistant_content = [block.model_dump() for block in final_message.content]
+            # Append assistant message
+            assistant_content = [b.model_dump() for b in final_message.content]
             self.context.messages.append({"role": "assistant", "content": assistant_content})
-
-            # Collect tool_use blocks
-            tool_use_blocks = [
-                ToolUseBlock(id=b.id, name=b.name, input=b.input)
-                for b in final_message.content
-                if b.type == "tool_use"
-            ]
 
             # No tool calls → done
             if final_message.stop_reason != "tool_use":
                 yield TurnComplete(text=full_text)
                 return
 
-            # --- Execute tools ---
-            tool_results = await self._execute_tools(tool_use_blocks)
-
-            # Yield execution results
-            for block, result in zip(tool_use_blocks, tool_results):
-                yield ToolExecResult(
-                    name=block.name, id=block.id,
-                    data=result.data, is_error=result.is_error,
-                )
+            # Yield tool execution results (some may already be done)
+            async for result_event in executor.get_results():
+                yield result_event
 
             # Append tool results to messages
             self.context.messages.append({
@@ -100,43 +103,8 @@ class AgentLoop:
                         "content": result.data,
                         "is_error": result.is_error,
                     }
-                    for block, result in zip(tool_use_blocks, tool_results)
+                    for block, result in executor.get_tool_results()
                 ],
             })
 
             self.context.compact_messages()
-
-    async def _execute_tools(self, blocks: list[ToolUseBlock]) -> list[ToolResult]:
-        results = []
-        for batch in self._partition(blocks):
-            if len(batch) == 1:
-                results.append(await self._run_tool(batch[0]))
-            else:
-                results.extend(await asyncio.gather(*[self._run_tool(b) for b in batch]))
-        return results
-
-    def _partition(self, blocks: list[ToolUseBlock]) -> list[list[ToolUseBlock]]:
-        """Group consecutive concurrent-safe tool calls; isolate unsafe ones."""
-        batches: list[list[ToolUseBlock]] = []
-        current: list[ToolUseBlock] = []
-        for block in blocks:
-            tool = self._tool_map.get(block.name)
-            safe = tool.is_concurrent_safe(block.input) if tool else False
-            if safe:
-                current.append(block)
-            else:
-                if current:
-                    batches.append(current)
-                    current = []
-                batches.append([block])
-        if current:
-            batches.append(current)
-        return batches
-
-    async def _run_tool(self, block: ToolUseBlock) -> ToolResult:
-        tool = self._tool_map.get(block.name)
-        if tool is None:
-            return ToolResult(data=f"Unknown tool: {block.name}", is_error=True)
-        if not self.pm.is_allowed(tool, block.input):
-            return ToolResult(data=f"Permission denied for {block.name}", is_error=True)
-        return await tool.call(block.input, self.context)
