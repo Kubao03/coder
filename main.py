@@ -4,6 +4,7 @@ import os
 import shutil
 from context import AgentContext
 from permissions import PermissionManager
+from settings import load_settings
 from agent_loop import AgentLoop
 from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete
 from session import SessionManager
@@ -71,8 +72,9 @@ def print_banner(session: SessionManager, resumed: bool = False):
 
 def make_agent(cwd: str, session: SessionManager) -> AgentLoop:
     tools = [BashTool(), FileReadTool(), FileEditTool(), FileWriteTool(), GlobTool(), GrepTool()]
+    settings = load_settings(cwd)
     ctx = AgentContext(cwd=cwd, tools=tools)
-    pm = PermissionManager()
+    pm = PermissionManager(settings, cwd)
     return AgentLoop(ctx, pm, session=session)
 
 
@@ -97,8 +99,10 @@ async def handle_message(agent: AgentLoop, user_input: str):
                 for line in preview.splitlines():
                     print(f"  {color}{line}{RESET}")
 
-            case TurnComplete():
-                if in_text:
+            case TurnComplete(text=text):
+                if text.startswith("[Permission denied"):
+                    print(f"\n  {YELLOW}{text}{RESET}")
+                elif in_text:
                     print()
 
 

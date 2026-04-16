@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from streaming_executor import StreamingToolExecutor, TrackedTool
-from agent_types import ToolResult, ToolUseBlock, ToolExecResult
+from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
 from tools.base import Tool
 
 
@@ -128,17 +128,15 @@ class TestStreamingExecutor:
         assert "Unknown tool" in results[0].data
 
     @pytest.mark.asyncio
-    async def test_permission_denied_returns_error(self):
+    async def test_permission_denied_raises_error(self):
         bash = FakeTool("Bash", read_only=False)
         pm = FakePermissionManager(deny_names={"Bash"})
         executor = StreamingToolExecutor({"Bash": bash}, pm, None)
 
         executor.add_tool(make_block("Bash", "t1", {"command": "rm -rf /"}))
-        results = [r async for r in executor.get_results()]
-
-        assert len(results) == 1
-        assert results[0].is_error
-        assert "Permission denied" in results[0].data
+        with pytest.raises(PermissionDeniedError):
+            async for _ in executor.get_results():
+                pass
 
     @pytest.mark.asyncio
     async def test_results_yielded_in_order(self):

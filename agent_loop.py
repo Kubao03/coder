@@ -11,6 +11,7 @@ from session import SessionManager
 from agent_types import (
     ToolResult, ToolUseBlock, StreamEvent,
     TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
+    PermissionDeniedError,
 )
 
 load_dotenv()
@@ -100,8 +101,34 @@ class AgentLoop:
                 yield TurnComplete(text=full_text)
                 return
 
-            async for result_event in executor.get_results():
-                yield result_event
+            try:
+                async for result_event in executor.get_results():
+                    yield result_event
+            except PermissionDeniedError as e:
+                # Append tool_result for every tool_use in the assistant message
+                # so the message history stays valid for the API
+                tool_use_blocks = [
+                    b for b in final_message.content if b.type == "tool_use"
+                ]
+                self._append_message({
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": b.id,
+                            "content": (
+                                "The user denied this tool call. "
+                                "This is NOT a system error — the user chose to reject it. "
+                                "Do not retry the same tool call. "
+                                "Ask the user what they would like to do instead."
+                            ),
+                            "is_error": True,
+                        }
+                        for b in tool_use_blocks
+                    ],
+                })
+                yield TurnComplete(text=f"[Permission denied: {e}]")
+                return
 
             self._append_message({
                 "role": "user",

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agent_loop import AgentLoop
 from context import AgentContext
 from permissions import PermissionManager
+from settings import Settings
 from agent_types import (
     ToolUseBlock, TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
 )
@@ -93,8 +94,13 @@ def ctx(tmp_path):
 
 
 @pytest.fixture
-def pm():
-    return PermissionManager()
+def pm(tmp_path):
+    settings = Settings(
+        permissions={"allow": [], "deny": []},
+        _user_raw={},
+        _project_raw={},
+    )
+    return PermissionManager(settings, cwd=str(tmp_path))
 
 
 # --- Tests ---
@@ -149,12 +155,15 @@ class TestAgentLoop:
     async def test_permission_denied(self, ctx, pm):
         loop = AgentLoop(ctx, pm)
         tool_stream = make_tool_stream("Bash", "tu_1", {"command": "rm -rf /"})
-        final_stream = make_text_stream("Blocked")
-        with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
+        with patch.object(loop.client.messages, "stream", side_effect=[tool_stream]):
             result = await loop.run("delete everything")
+        # turn ends with error tool_result so message history stays API-valid
+        assert "[Permission denied" in result
+        assert len(ctx.messages) == 3  # user + assistant + tool_result
         tool_result_msg = ctx.messages[2]
         assert tool_result_msg["role"] == "user"
         assert tool_result_msg["content"][0]["is_error"] is True
+        assert "user denied" in tool_result_msg["content"][0]["content"].lower()
 
     @pytest.mark.asyncio
     async def test_unknown_tool(self, ctx, pm):

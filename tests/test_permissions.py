@@ -1,66 +1,175 @@
+import json
 import pytest
 from unittest.mock import patch
+from settings import Settings
 from permissions import PermissionManager
 from tools.bash import BashTool
 from tools.file_read import FileReadTool
 from tools.file_write import FileWriteTool
 
 
+def _make_pm(allow=None, deny=None):
+    """Helper to create a PermissionManager with given rules."""
+    settings = Settings(
+        permissions={
+            "allow": allow or [],
+            "deny": deny or [],
+        },
+        _user_raw={"permissions": {"allow": allow or [], "deny": deny or []}},
+        _project_raw={},
+    )
+    return PermissionManager(settings, cwd="/tmp")
+
+
 class TestPermissionManager:
     def setup_method(self):
-        self.pm = PermissionManager()
         self.bash = BashTool()
         self.read = FileReadTool()
         self.write = FileWriteTool()
 
-    # Layer 1: always deny
+    # Hard-coded deny
     def test_deny_dangerous_command(self):
-        allowed, _ = self.pm.check(self.bash, {"command": "rm -rf / --no-preserve-root"})
+        pm = _make_pm()
+        allowed, _ = pm.check(self.bash, {"command": "rm -rf / --no-preserve-root"})
         assert allowed is False
 
-    # Layer 2: always allow
+    # Read-only tool auto-allowed
     def test_always_allow_read_tool(self):
-        allowed, _ = self.pm.check(self.read, {"file_path": "/tmp/x"})
+        pm = _make_pm()
+        allowed, _ = pm.check(self.read, {"file_path": "/tmp/x"})
         assert allowed is True
 
-    # Layer 3: read-only
+    # Read-only bash auto-allowed
     def test_allow_readonly_bash(self):
-        allowed, _ = self.pm.check(self.bash, {"command": "ls -la"})
+        pm = _make_pm()
+        allowed, _ = pm.check(self.bash, {"command": "ls -la"})
         assert allowed is True
 
-    # Layer 4: session approval
+    # Settings deny rule
+    def test_deny_rule(self):
+        pm = _make_pm(deny=["Bash(npm *)"])
+        allowed, reason = pm.check(self.bash, {"command": "npm install evil"})
+        assert allowed is False
+        assert "denied" in reason.lower()
+
+    # Settings allow rule
+    def test_allow_rule(self):
+        pm = _make_pm(allow=["Write"])
+        allowed, reason = pm.check(self.write, {"file_path": "/tmp/x", "content": "y"})
+        assert allowed is True
+        assert "allow" in reason.lower()
+
+    # Deny overrides allow
+    def test_deny_overrides_allow(self):
+        pm = _make_pm(allow=["Bash"], deny=["Bash(rm *)"])
+        allowed, _ = pm.check(self.bash, {"command": "rm foo"})
+        assert allowed is False
+
+    # Bash pattern matching
+    def test_allow_bash_pattern(self):
+        pm = _make_pm(allow=["Bash(git *)"])
+        allowed, _ = pm.check(self.bash, {"command": "git status"})
+        assert allowed is True
+        allowed2, _ = pm.check(self.bash, {"command": "npm install"})
+        assert allowed2 is None  # needs confirmation
+
+    # Session approval
     def test_session_approval(self):
-        allowed, _ = self.pm.check(self.write, {"file_path": "/tmp/x", "content": "y"})
-        assert allowed is None  # needs confirmation first
+        pm = _make_pm()
+        allowed, _ = pm.check(self.write, {"file_path": "/tmp/x", "content": "y"})
+        assert allowed is None
 
-        self.pm._session_allowed.add("Write")
-        allowed, _ = self.pm.check(self.write, {"file_path": "/tmp/x", "content": "y"})
-        assert allowed is True
-
-    # Layer 5: user prompt - y
-    def test_ask_yes(self):
-        with patch("builtins.input", return_value="y"):
-            result = self.pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
-        assert result is True
-        assert "Write" not in self.pm._session_allowed
-
-    # Layer 5: user prompt - a (always)
-    def test_ask_always(self):
         with patch("builtins.input", return_value="a"):
-            result = self.pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
+            result = pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
         assert result is True
-        assert "Write" in self.pm._session_allowed
 
-    # Layer 5: user prompt - n
+        # now session rule should apply
+        allowed2, reason = pm.check(self.write, {"file_path": "/tmp/x", "content": "y"})
+        assert allowed2 is True
+        assert "session" in reason
+
+    # User prompt - y
+    def test_ask_yes(self):
+        pm = _make_pm()
+        with patch("builtins.input", return_value="y"):
+            result = pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
+        assert result is True
+
+    # User prompt - n
     def test_ask_no(self):
+        pm = _make_pm()
         with patch("builtins.input", return_value="n"):
-            result = self.pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
+            result = pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
         assert result is False
 
-    # Full flow: is_allowed
-    def test_is_allowed_write_with_user_yes(self):
-        with patch("builtins.input", return_value="y"):
-            assert self.pm.is_allowed(self.write, {"file_path": "/tmp/x", "content": "y"}) is True
+    # Persist rule — saves with generalized pattern
+    def test_ask_persist(self, tmp_path):
+        settings = Settings(
+            permissions={"allow": [], "deny": []},
+            _user_raw={},
+            _project_raw={},
+        )
+        pm = PermissionManager(settings, cwd=str(tmp_path))
 
+        with patch("builtins.input", return_value="p"):
+            result = pm.ask(self.write, {"file_path": "/tmp/x", "content": "y"})
+        assert result is True
+
+        # rule should be persisted with parent directory glob
+        settings_path = tmp_path / ".coder" / "settings.json"
+        assert settings_path.exists()
+        data = json.loads(settings_path.read_text())
+        assert "Write(/tmp/*)" in data["permissions"]["allow"]
+
+        # should match other files in the same directory
+        allowed, _ = pm.check(self.write, {"file_path": "/tmp/other.py", "content": "y"})
+        assert allowed is True
+
+        # but NOT match a different directory
+        allowed2, _ = pm.check(self.write, {"file_path": "/etc/passwd", "content": "y"})
+        assert allowed2 is None
+
+    # Persist rule for Bash — saves generalized command prefix
+    def test_ask_persist_bash(self, tmp_path):
+        settings = Settings(
+            permissions={"allow": [], "deny": []},
+            _user_raw={},
+            _project_raw={},
+        )
+        pm = PermissionManager(settings, cwd=str(tmp_path))
+
+        with patch("builtins.input", return_value="p"):
+            result = pm.ask(self.bash, {"command": "git add main.py"})
+        assert result is True
+
+        settings_path = tmp_path / ".coder" / "settings.json"
+        data = json.loads(settings_path.read_text())
+        # should save 'git add *', not 'git add main.py'
+        assert "Bash(git add *)" in data["permissions"]["allow"]
+
+        # should match other git add commands
+        allowed, _ = pm.check(self.bash, {"command": "git add other.py"})
+        assert allowed is True
+
+        # but not git push
+        allowed2, _ = pm.check(self.bash, {"command": "git push"})
+        assert allowed2 is None
+
+    # Session always — also saves with generalized pattern
+    def test_session_always_with_pattern(self):
+        pm = _make_pm()
+        with patch("builtins.input", return_value="a"):
+            pm.ask(self.bash, {"command": "npm install foo"})
+
+        # same subcommand, different args — should be allowed
+        allowed, _ = pm.check(self.bash, {"command": "npm install bar"})
+        assert allowed is True
+
+        # different subcommand — should NOT be auto-allowed
+        allowed2, _ = pm.check(self.bash, {"command": "npm run evil"})
+        assert allowed2 is None
+
+    # Full flow
     def test_is_allowed_dangerous_denied(self):
-        assert self.pm.is_allowed(self.bash, {"command": "rm -rf /"}) is False
+        pm = _make_pm()
+        assert pm.is_allowed(self.bash, {"command": "rm -rf /"}) is False

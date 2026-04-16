@@ -2,7 +2,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
-from agent_types import ToolResult, ToolUseBlock, ToolExecResult
+from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
 from tools.base import Tool
 from permissions import PermissionManager
 
@@ -29,6 +29,7 @@ class StreamingToolExecutor:
         self._context = context
         self._tools: list[TrackedTool] = []
         self._done_event = asyncio.Event()
+        self._permission_error: PermissionDeniedError | None = None
 
     def add_tool(self, block: ToolUseBlock):
         tool = self._tool_map.get(block.name)
@@ -60,7 +61,10 @@ class StreamingToolExecutor:
         if tool is None:
             tracked.result = ToolResult(data=f"Unknown tool: {tracked.block.name}", is_error=True)
         elif not self._pm.is_allowed(tool, tracked.block.input):
-            tracked.result = ToolResult(data=f"Permission denied for {tracked.block.name}", is_error=True)
+            self._permission_error = PermissionDeniedError(tracked.block.name)
+            tracked.status = "completed"
+            self._done_event.set()
+            return
         else:
             tracked.result = await tool.call(tracked.block.input, self._context)
         tracked.status = "completed"
@@ -73,6 +77,8 @@ class StreamingToolExecutor:
         while idx < len(self._tools):
             tracked = self._tools[idx]
             if tracked.status == "completed":
+                if self._permission_error is not None:
+                    raise self._permission_error
                 yield ToolExecResult(
                     name=tracked.block.name,
                     id=tracked.block.id,
