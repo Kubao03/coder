@@ -3,8 +3,11 @@ import platform
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from tools.base import Tool
+
+if TYPE_CHECKING:
+    from settings import Settings
 
 
 def _detect_shell() -> str:
@@ -38,6 +41,7 @@ class AgentContext:
 
     cwd: str
     tools: list[Tool]
+    settings: "Settings | None" = None
     messages: list[dict[str, Any]] = field(default_factory=list)
 
     def build_system_prompt(self) -> str:

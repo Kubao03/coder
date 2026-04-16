@@ -5,6 +5,7 @@ from typing import AsyncGenerator
 from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
 from tools.base import Tool
 from permissions import PermissionManager
+from hooks import HookRunner
 
 
 @dataclass
@@ -30,6 +31,13 @@ class StreamingToolExecutor:
         self._tools: list[TrackedTool] = []
         self._done_event = asyncio.Event()
         self._permission_error: PermissionDeniedError | None = None
+        if context is not None and context.settings is not None:
+            hooks_dict = context.settings.hooks
+            cwd = context.cwd
+        else:
+            hooks_dict = {}
+            cwd = "."
+        self._hooks = HookRunner(hooks_dict, cwd=cwd)
 
     def add_tool(self, block: ToolUseBlock):
         tool = self._tool_map.get(block.name)
@@ -66,7 +74,24 @@ class StreamingToolExecutor:
             self._done_event.set()
             return
         else:
-            tracked.result = await tool.call(tracked.block.input, self._context)
+            # PreToolUse hooks
+            pre = await self._hooks.run_pre_tool(tracked.block.name, tracked.block.input)
+            if pre.blocked:
+                tracked.result = ToolResult(
+                    data=f"[PreToolUse hook blocked] {pre.block_reason}",
+                    is_error=True,
+                )
+            else:
+                tool_result = await tool.call(tracked.block.input, self._context)
+                # PostToolUse hooks (fire-and-forget; output appended to result)
+                post = await self._hooks.run_post_tool(
+                    tracked.block.name, tracked.block.input, tool_result.data
+                )
+                if post.output:
+                    data = tool_result.data + f"\n\n[PostToolUse hook]\n{post.output}"
+                    tracked.result = ToolResult(data=data, is_error=tool_result.is_error)
+                else:
+                    tracked.result = tool_result
         tracked.status = "completed"
         self._done_event.set()
         self._try_execute()

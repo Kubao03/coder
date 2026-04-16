@@ -73,7 +73,7 @@ def print_banner(session: SessionManager, resumed: bool = False):
 def make_agent(cwd: str, session: SessionManager) -> AgentLoop:
     tools = [BashTool(), FileReadTool(), FileEditTool(), FileWriteTool(), GlobTool(), GrepTool()]
     settings = load_settings(cwd)
-    ctx = AgentContext(cwd=cwd, tools=tools)
+    ctx = AgentContext(cwd=cwd, tools=tools, settings=settings)
     pm = PermissionManager(settings, cwd)
     return AgentLoop(ctx, pm, session=session)
 
