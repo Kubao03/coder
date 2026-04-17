@@ -6,6 +6,7 @@ from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeni
 from tools.base import Tool
 from permissions import PermissionManager
 from hooks import HookRunner
+from hooks_builtin import register_builtin_hooks
 
 
 @dataclass
@@ -38,6 +39,7 @@ class StreamingToolExecutor:
             hooks_dict = {}
             cwd = "."
         self._hooks = HookRunner(hooks_dict, cwd=cwd)
+        register_builtin_hooks(self._hooks)
 
     def add_tool(self, block: ToolUseBlock):
         tool = self._tool_map.get(block.name)

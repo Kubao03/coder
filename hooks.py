@@ -1,10 +1,16 @@
-"""Hook runner: execute PreToolUse / PostToolUse shell hooks from settings."""
+"""Hook runner: execute PreToolUse / PostToolUse hooks.
+
+Two hook sources:
+- Shell commands configured in settings.json
+- Built-in callback functions registered at startup
+"""
 
 import asyncio
+import inspect
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable, Union
 
 
 # ---------------------------------------------------------------------------
@@ -41,16 +47,40 @@ def _matches(tool_name: str, matcher: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Callback hook types
+# ---------------------------------------------------------------------------
+
+# Pre-tool callback: (tool_name, tool_input, cwd) → HookResult | None
+# Return None to pass through; return HookResult(blocked=True, ...) to block.
+PreCallback = Callable[[str, dict, str], Union[HookResult, None, Awaitable[Union[HookResult, None]]]]
+
+# Post-tool callback: (tool_name, tool_input, tool_output, cwd) → str | None
+# Return a string to append to tool_output; None to do nothing.
+PostCallback = Callable[[str, dict, str, str], Union[str, None, Awaitable[Union[str, None]]]]
+
+
+# ---------------------------------------------------------------------------
 # HookRunner
 # ---------------------------------------------------------------------------
 
 class HookRunner:
-    """Run configured shell hooks for tool events."""
+    """Run shell-command and callback hooks for tool events."""
 
     def __init__(self, hooks_config: dict[str, Any], cwd: str, session_id: str = ""):
         self._config = hooks_config  # {"PreToolUse": [...], "PostToolUse": [...]}
         self._cwd = cwd
         self._session_id = session_id
+        # (matcher, callback) pairs registered at startup
+        self._pre_callbacks: list[tuple[str, PreCallback]] = []
+        self._post_callbacks: list[tuple[str, PostCallback]] = []
+
+    def register_pre_callback(self, matcher: str, fn: PreCallback) -> None:
+        """Register a built-in PreToolUse callback for tools matching `matcher`."""
+        self._pre_callbacks.append((matcher, fn))
+
+    def register_post_callback(self, matcher: str, fn: PostCallback) -> None:
+        """Register a built-in PostToolUse callback for tools matching `matcher`."""
+        self._post_callbacks.append((matcher, fn))
 
     def _get_matching_commands(self, event: str, tool_name: str) -> list[str]:
         """Return ordered list of shell commands that match tool_name for event."""
@@ -96,9 +126,25 @@ class HookRunner:
 
     async def run_pre_tool(self, tool_name: str, tool_input: dict[str, Any]) -> HookResult:
         """Run PreToolUse hooks. Returns HookResult with blocked=True if any hook blocks."""
+        output_parts: list[str] = []
+
+        # Built-in callbacks run first — cheaper than spawning a shell
+        for matcher, fn in self._pre_callbacks:
+            if not _matches(tool_name, matcher):
+                continue
+            result = fn(tool_name, tool_input, self._cwd)
+            if inspect.isawaitable(result):
+                result = await result
+            if result is None:
+                continue
+            if result.blocked:
+                return result
+            if result.output:
+                output_parts.append(result.output)
+
         commands = self._get_matching_commands("PreToolUse", tool_name)
         if not commands:
-            return HookResult()
+            return HookResult(output="\n".join(output_parts))
 
         stdin_data = {
             "session_id": self._session_id,
@@ -108,7 +154,6 @@ class HookRunner:
             "cwd": self._cwd,
         }
 
-        output_parts: list[str] = []
         for command in commands:
             rc, stdout, stderr = await self._run_command(command, stdin_data)
 
@@ -142,9 +187,20 @@ class HookRunner:
         tool_output: str,
     ) -> HookResult:
         """Run PostToolUse hooks. Blocking is ignored; output is returned for display."""
+        output_parts: list[str] = []
+
+        for matcher, fn in self._post_callbacks:
+            if not _matches(tool_name, matcher):
+                continue
+            result = fn(tool_name, tool_input, tool_output, self._cwd)
+            if inspect.isawaitable(result):
+                result = await result
+            if result:
+                output_parts.append(result)
+
         commands = self._get_matching_commands("PostToolUse", tool_name)
         if not commands:
-            return HookResult()
+            return HookResult(output="\n".join(output_parts))
 
         stdin_data = {
             "session_id": self._session_id,
@@ -155,7 +211,6 @@ class HookRunner:
             "cwd": self._cwd,
         }
 
-        output_parts: list[str] = []
         for command in commands:
             rc, stdout, stderr = await self._run_command(command, stdin_data)
             if stdout.strip():
