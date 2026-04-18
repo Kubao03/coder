@@ -5,8 +5,7 @@ from typing import AsyncGenerator
 from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
 from tools.base import Tool
 from permissions import PermissionManager
-from hooks import HookRunner
-from hooks_builtin import register_builtin_hooks
+from hooks import HookRunner, register_builtin_hooks
 
 
 @dataclass

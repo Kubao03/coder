@@ -1,12 +1,8 @@
 """Tests for built-in hooks: dangerous_bash_guard and file_write_audit."""
 
 import pytest
-from hooks import HookRunner
-from hooks_builtin import (
-    dangerous_bash_guard,
-    file_write_audit,
-    register_builtin_hooks,
-)
+from hooks import HookRunner, register_builtin_hooks
+from hooks.builtin import dangerous_bash_guard, file_write_audit
 
 
 # ---------------------------------------------------------------------------

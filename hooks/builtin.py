@@ -9,7 +9,7 @@ import datetime
 import re
 from pathlib import Path
 
-from hooks import HookResult, HookRunner
+from hooks.runner import HookResult, HookRunner
 
 
 # ---------------------------------------------------------------------------

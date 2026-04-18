@@ -2,7 +2,8 @@
 
 import json
 import pytest
-from hooks import HookRunner, _matches
+from hooks import HookRunner
+from hooks.runner import _matches
 
 
 # ---------------------------------------------------------------------------

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from tools.base import Tool
 from settings import Settings, add_permission_rule
-from permission_rule import (
+from permissions.rules import (
     PermissionRule, PermissionRuleValue,
     parse_rule, match_rule, load_rules_from_settings,
     build_rule_str,
