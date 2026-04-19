@@ -17,6 +17,7 @@ class SessionManager:
         self._dir = self._project_dir()
         self._dir.mkdir(parents=True, exist_ok=True)
         self.path = self._dir / f"{self.session_id}.jsonl"
+        self.tool_results_dir = self._dir / f"{self.session_id}.tool-results"
 
     def _project_dir(self) -> Path:
         """Session dir scoped to project (sanitized cwd)."""

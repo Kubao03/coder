@@ -8,6 +8,7 @@ from context import AgentContext
 from permissions import PermissionManager
 from streaming_executor import StreamingToolExecutor
 from services.compact import auto_compact, compact_conversation, COMPACT_USER_PREFIX
+from services.tool_result_storage import process_tool_result_content
 from session import SessionManager
 from agent_types import (
     ToolResult, ToolUseBlock, StreamEvent,
@@ -185,13 +186,16 @@ class AgentLoop:
                 yield TurnComplete(text=f"[Permission denied: {e}]")
                 return
 
+            tool_results_dir = self.session.tool_results_dir if self.session else None
             self._append_message({
                 "role": "user",
                 "content": [
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": result.data,
+                        "content": process_tool_result_content(
+                            result.data, block.name, block.id, tool_results_dir,
+                        ),
                         "is_error": result.is_error,
                     }
                     for block, result in executor.get_tool_results()
