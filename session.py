@@ -14,8 +14,12 @@ class SessionManager:
     def __init__(self, session_id: str | None = None, cwd: str | None = None):
         self.session_id = session_id or uuid4().hex[:12]
         self.cwd = cwd or os.getcwd()
+        # Paths are computed eagerly but the directory is created lazily on
+        # first write. This keeps construction side-effect-free — tests that
+        # instantiate SessionManager and immediately overwrite `_dir` (or
+        # never call `record`) no longer leak empty project dirs into
+        # ~/.coder/sessions.
         self._dir = self._project_dir()
-        self._dir.mkdir(parents=True, exist_ok=True)
         self.path = self._dir / f"{self.session_id}.jsonl"
         self.tool_results_dir = self._dir / f"{self.session_id}.tool-results"
 
@@ -31,6 +35,7 @@ class SessionManager:
             "role": message["role"],
             "content": message["content"],
         }
+        self._dir.mkdir(parents=True, exist_ok=True)
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
