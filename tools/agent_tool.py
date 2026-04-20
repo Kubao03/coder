@@ -9,6 +9,7 @@ from tools.base import Tool
 from context import AgentContext
 from agent_types import ToolResult, TurnComplete, ToolUseStart
 from subagents.registry import AGENT_REGISTRY, AgentDefinition, all_types
+from services import worktree as wt
 
 
 class AgentTool(Tool):
@@ -18,8 +19,10 @@ class AgentTool(Tool):
     MVP tradeoffs:
     - Permissions: shared with parent (same PermissionManager instance)
     - Hooks: shared with parent
-    - Streaming: silent — sub-agent events are not forwarded to the terminal
-    - No fork/resume, no memory, no worktree isolation (deferred to 3.2)
+    - Streaming: sub-agent events are forwarded via context.subagent_listener
+    - No fork/resume, no memory
+    - Isolation: per-preset via AgentDefinition.isolation. "worktree" creates a
+      sibling git worktree on a fresh branch. None means shared parent cwd.
     - AgentTool is always filtered out of the sub-agent's tool list (prevents recursion)
     """
 
@@ -145,6 +148,10 @@ async def _run_subagent(
 
     If `listener` is provided, the sub-agent's tool-use events are forwarded to
     it so the UI can render progress (preset tag + tool name + brief args).
+
+    If the preset declares `isolation="worktree"`, the child runs in a separate
+    git worktree. After completion, the worktree is removed if empty; otherwise
+    its path + branch are appended to the report so the caller can review.
     """
     # Local import: AgentLoop depends on tools indirectly via type hints at
     # runtime, but importing at module load time creates a cycle with main.py's
@@ -153,8 +160,20 @@ async def _run_subagent(
 
     child_tools = _filter_tools(parent_context.tools, definition.tools)
 
+    # Resolve cwd — default to parent, override with worktree path if isolated.
+    child_cwd = parent_context.cwd
+    worktree_obj: wt.Worktree | None = None
+    if definition.isolation == "worktree":
+        worktree_obj = _setup_worktree(parent_context.cwd, invocation_id or "run")
+        child_cwd = str(worktree_obj.path)
+        if listener is not None:
+            _notify(
+                listener, definition.agent_type, invocation_id, "worktree",
+                {"path": child_cwd, "branch": worktree_obj.branch},
+            )
+
     child_ctx = _SubagentContext(
-        cwd=parent_context.cwd,
+        cwd=child_cwd,
         tools=child_tools,
         settings=parent_context.settings,
         messages=[],
@@ -172,16 +191,51 @@ async def _run_subagent(
     child_loop = AgentLoop(child_ctx, pm, session=None)
 
     final_text = ""
-    async for event in child_loop.run_stream(prompt):
-        if isinstance(event, TurnComplete):
-            final_text = event.text
-        elif isinstance(event, ToolUseStart) and listener is not None:
-            _notify(
-                listener, definition.agent_type, invocation_id, "tool",
-                {"name": event.name, "input": event.input},
-            )
+    try:
+        async for event in child_loop.run_stream(prompt):
+            if isinstance(event, TurnComplete):
+                final_text = event.text
+            elif isinstance(event, ToolUseStart) and listener is not None:
+                _notify(
+                    listener, definition.agent_type, invocation_id, "tool",
+                    {"name": event.name, "input": event.input},
+                )
+    finally:
+        if worktree_obj is not None:
+            final_text = _finalize_worktree(worktree_obj, final_text)
 
     return final_text or "(sub-agent produced no final text)"
+
+
+def _setup_worktree(parent_cwd: str, tag: str) -> wt.Worktree:
+    """Find git root from parent_cwd and create a worktree, or raise.
+
+    Hard-errors when the parent cwd is not inside a git repo — isolation was
+    requested by the preset, so silently falling back to shared cwd would
+    defeat the whole point.
+    """
+    repo_root = wt.find_git_root(parent_cwd)
+    if repo_root is None:
+        raise wt.WorktreeError(
+            f"worktree isolation requested but {parent_cwd} is not inside a git repository. "
+            "Switch to a different sub-agent preset, or run inside a git repo."
+        )
+    return wt.create_worktree(repo_root, tag)
+
+
+def _finalize_worktree(worktree_obj: wt.Worktree, report: str) -> str:
+    """Remove empty worktree, or append path + branch to the report if it has changes."""
+    if wt.has_changes(worktree_obj):
+        note = (
+            f"\n\n---\n"
+            f"Sub-agent changes preserved in worktree:\n"
+            f"  path:   {worktree_obj.path}\n"
+            f"  branch: {worktree_obj.branch}\n"
+            f"Review and merge back into the main workspace if desired."
+        )
+        return (report or "") + note
+    wt.remove_worktree(worktree_obj)
+    return report
 
 
 def _notify(

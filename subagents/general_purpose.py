@@ -26,8 +26,10 @@ GENERAL_PURPOSE = AgentDefinition(
     when_to_use=(
         "General-purpose agent for researching complex questions, searching for code, "
         "and executing multi-step tasks. Use when you are not confident a narrow search "
-        "will find the right match in the first few tries."
+        "will find the right match in the first few tries. Runs in an isolated git "
+        "worktree — any file changes stay on a separate branch until you review."
     ),
     system_prompt=_SYSTEM_PROMPT,
     tools=["*"],
+    isolation="worktree",
 )

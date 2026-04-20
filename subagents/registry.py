@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -14,12 +15,16 @@ class AgentDefinition:
     - system_prompt: the sub-agent's system prompt (overrides parent)
     - tools: allowed tool names, or ["*"] to inherit all parent tools
       (AgentTool itself is always filtered out to prevent recursion)
+    - isolation: if "worktree", the sub-agent runs in a fresh git worktree on
+      a new branch. Changes stay in that worktree unless the caller merges
+      them back. None (default) means the sub-agent shares the parent's cwd.
     """
 
     agent_type: str
     when_to_use: str
     system_prompt: str
     tools: list[str]
+    isolation: Literal["worktree"] | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 from unittest.mock import patch
 
 from agent_types import ToolResult
@@ -10,6 +11,7 @@ from tools.bash import BashTool
 from tools.file_read import FileReadTool
 from subagents.registry import AGENT_REGISTRY, AgentDefinition
 from subagents.general_purpose import GENERAL_PURPOSE
+from services import worktree as wt
 
 from tests.test_agent_loop import make_text_stream, make_tool_stream
 
@@ -32,6 +34,35 @@ def pm(tmp_path):
         _project_raw={},
     )
     return PermissionManager(settings, cwd=str(tmp_path))
+
+
+@pytest.fixture
+def stub_worktree(monkeypatch, tmp_path):
+    """Stub out services.worktree so E2E tests don't hit real git.
+
+    - find_git_root: pretends cwd is a git root
+    - create_worktree: returns a fake Worktree pointing at a tmp path
+    - has_changes: returns False (triggers the remove-worktree path)
+    - remove_worktree: no-op
+    """
+    def fake_find_git_root(cwd):
+        return Path(cwd)
+
+    def fake_create_worktree(repo_root, tag):
+        path = tmp_path / f"wt-{tag}"
+        path.mkdir(exist_ok=True)
+        return wt.Worktree(path=path, branch=f"coder/subagent/{tag}", repo_root=repo_root)
+
+    def fake_has_changes(w):
+        return False
+
+    def fake_remove_worktree(w):
+        pass
+
+    monkeypatch.setattr(wt, "find_git_root", fake_find_git_root)
+    monkeypatch.setattr(wt, "create_worktree", fake_create_worktree)
+    monkeypatch.setattr(wt, "has_changes", fake_has_changes)
+    monkeypatch.setattr(wt, "remove_worktree", fake_remove_worktree)
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +234,7 @@ class TestCallE2E:
         _FakeAgentLoop.scripted_events = []
 
     @pytest.mark.asyncio
-    async def test_simple_dispatch_returns_final_text(self, ctx, pm, monkeypatch):
+    async def test_simple_dispatch_returns_final_text(self, ctx, pm, monkeypatch, stub_worktree):
         ctx._pm = pm
         # Patch the AgentLoop symbol that _run_subagent imports lazily.
         import agent_loop
@@ -218,7 +249,7 @@ class TestCallE2E:
         assert out.data == "report for: please investigate"
 
     @pytest.mark.asyncio
-    async def test_child_loop_receives_scoped_context(self, ctx, pm, monkeypatch):
+    async def test_child_loop_receives_scoped_context(self, ctx, pm, monkeypatch, stub_worktree):
         ctx._pm = pm
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
@@ -229,9 +260,10 @@ class TestCallE2E:
 
         assert len(_FakeAgentLoop.instances) == 1
         child = _FakeAgentLoop.instances[0]
-        # Sub-agent inherits cwd + permission manager.
-        assert child.context.cwd == ctx.cwd
+        # Sub-agent inherits permission manager from the parent.
         assert child.pm is pm
+        # With isolation="worktree", child cwd is the worktree path, not parent cwd.
+        assert child.context.cwd != ctx.cwd
         # Sub-agent gets its own messages list — independent from parent.
         assert child.context.messages == []
         assert child.context.messages is not ctx.messages
@@ -244,7 +276,7 @@ class TestCallE2E:
         assert child.session is None
 
     @pytest.mark.asyncio
-    async def test_parent_messages_untouched(self, ctx, pm, monkeypatch):
+    async def test_parent_messages_untouched(self, ctx, pm, monkeypatch, stub_worktree):
         ctx._pm = pm
         ctx.messages.append({"role": "user", "content": "parent turn"})
         import agent_loop
@@ -292,7 +324,7 @@ class TestCallE2E:
         assert events_seen[2][2]["error"] is False
 
     @pytest.mark.asyncio
-    async def test_listener_end_marked_error_on_exception(self, ctx, pm, monkeypatch):
+    async def test_listener_end_marked_error_on_exception(self, ctx, pm, monkeypatch, stub_worktree):
         ctx._pm = pm
         events_seen: list[tuple] = []
         ctx.subagent_listener = lambda preset, inv_id, kind, payload: events_seen.append(
@@ -321,7 +353,7 @@ class TestCallE2E:
         assert events_seen[-1][2]["error"] is True
 
     @pytest.mark.asyncio
-    async def test_listener_errors_swallowed(self, ctx, pm, monkeypatch):
+    async def test_listener_errors_swallowed(self, ctx, pm, monkeypatch, stub_worktree):
         """A broken listener must not crash sub-agent execution."""
         ctx._pm = pm
         ctx.subagent_listener = lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad listener"))
@@ -334,7 +366,7 @@ class TestCallE2E:
         assert not out.is_error
 
     @pytest.mark.asyncio
-    async def test_exception_surfaces_as_error_result(self, ctx, pm, monkeypatch):
+    async def test_exception_surfaces_as_error_result(self, ctx, pm, monkeypatch, stub_worktree):
         ctx._pm = pm
 
         class _Boom:
@@ -354,3 +386,253 @@ class TestCallE2E:
 
         assert out.is_error
         assert "boom" in out.data
+
+
+# ---------------------------------------------------------------------------
+# Worktree isolation — AgentTool-level integration (with stubbed git)
+# ---------------------------------------------------------------------------
+
+class TestWorktreeIsolation:
+    def setup_method(self):
+        _FakeAgentLoop.instances.clear()
+        _FakeAgentLoop.scripted_events = []
+
+    @pytest.mark.asyncio
+    async def test_general_purpose_runs_in_worktree_cwd(
+        self, ctx, pm, monkeypatch, stub_worktree,
+    ):
+        """Child AgentLoop's context.cwd must be the worktree path, not parent cwd."""
+        ctx._pm = pm
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
+
+        await AgentTool().call(
+            {"prompt": "go", "subagent_type": "general-purpose"}, ctx,
+        )
+
+        child = _FakeAgentLoop.instances[0]
+        assert child.context.cwd != ctx.cwd
+        assert "wt-" in child.context.cwd
+
+    @pytest.mark.asyncio
+    async def test_explore_does_not_create_worktree(self, ctx, pm, monkeypatch):
+        """Read-only presets skip worktree creation entirely — no git calls made."""
+        ctx._pm = pm
+
+        def _should_not_be_called(*a, **kw):
+            raise AssertionError("worktree API hit for non-isolated preset")
+
+        monkeypatch.setattr(wt, "create_worktree", _should_not_be_called)
+        monkeypatch.setattr(wt, "find_git_root", _should_not_be_called)
+
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
+
+        await AgentTool().call(
+            {"prompt": "search", "subagent_type": "Explore"}, ctx,
+        )
+
+        child = _FakeAgentLoop.instances[0]
+        # Explore inherits parent cwd — no isolation.
+        assert child.context.cwd == ctx.cwd
+
+    @pytest.mark.asyncio
+    async def test_non_git_cwd_hard_errors(self, ctx, pm, monkeypatch):
+        """general-purpose in a non-git dir returns an error result, doesn't silently fall back."""
+        ctx._pm = pm
+        monkeypatch.setattr(wt, "find_git_root", lambda cwd: None)
+        # If the code accidentally proceeds past the git-root check, fail loudly.
+        monkeypatch.setattr(wt, "create_worktree", lambda *a, **kw: pytest.fail("should not create"))
+
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
+
+        out = await AgentTool().call(
+            {"prompt": "go", "subagent_type": "general-purpose"}, ctx,
+        )
+
+        assert out.is_error
+        assert "not inside a git repository" in out.data
+
+    @pytest.mark.asyncio
+    async def test_worktree_event_fired(self, ctx, pm, monkeypatch, stub_worktree):
+        ctx._pm = pm
+        events_seen: list[tuple] = []
+        ctx.subagent_listener = lambda preset, inv_id, kind, payload: events_seen.append(
+            (kind, payload)
+        )
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
+
+        await AgentTool().call(
+            {"prompt": "go", "subagent_type": "general-purpose"}, ctx,
+        )
+
+        kinds = [e[0] for e in events_seen]
+        assert "worktree" in kinds
+        # The worktree event carries path + branch.
+        wt_payload = next(p for k, p in events_seen if k == "worktree")
+        assert "path" in wt_payload and "branch" in wt_payload
+        assert wt_payload["branch"].startswith("coder/subagent/")
+
+    @pytest.mark.asyncio
+    async def test_clean_worktree_is_removed(self, ctx, pm, monkeypatch, stub_worktree):
+        """If sub-agent made no changes, worktree is removed and the report has no trailing note."""
+        ctx._pm = pm
+        removes: list = []
+        monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
+        # stub_worktree already sets has_changes -> False
+
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
+
+        out = await AgentTool().call(
+            {"prompt": "go", "subagent_type": "general-purpose"}, ctx,
+        )
+
+        assert not out.is_error
+        assert len(removes) == 1
+        assert "worktree" not in out.data.lower()
+
+    @pytest.mark.asyncio
+    async def test_dirty_worktree_is_kept_and_reported(self, ctx, pm, monkeypatch, stub_worktree):
+        """If sub-agent made changes, worktree is preserved and path/branch appear in report."""
+        ctx._pm = pm
+        monkeypatch.setattr(wt, "has_changes", lambda w: True)
+        removes: list = []
+        monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
+
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
+
+        out = await AgentTool().call(
+            {"prompt": "go", "subagent_type": "general-purpose"}, ctx,
+        )
+
+        assert not out.is_error
+        assert removes == []  # not cleaned up
+        assert "coder/subagent/" in out.data  # branch mentioned
+        assert "preserved" in out.data.lower()
+
+    @pytest.mark.asyncio
+    async def test_worktree_removed_on_subagent_exception(self, ctx, pm, monkeypatch, stub_worktree):
+        """Even if sub-agent raises, the worktree cleanup still runs (finally block)."""
+        ctx._pm = pm
+        removes: list = []
+        monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
+
+        class _Boom:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def run_stream(self, _):
+                raise RuntimeError("boom")
+                yield  # pragma: no cover
+
+        import agent_loop
+        monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
+
+        out = await AgentTool().call(
+            {"prompt": "go", "subagent_type": "general-purpose"}, ctx,
+        )
+
+        assert out.is_error
+        assert len(removes) == 1, "worktree must be cleaned up on sub-agent failure"
+
+
+# ---------------------------------------------------------------------------
+# services.worktree — real git integration tests
+# ---------------------------------------------------------------------------
+
+import subprocess
+import shutil
+
+
+def _git_available() -> bool:
+    return shutil.which("git") is not None
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    """Create a real git repo with one commit; return its root path."""
+    if not _git_available():
+        pytest.skip("git not installed")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    def run(*args):
+        subprocess.run(args, cwd=repo, check=True, capture_output=True)
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@t.t")
+    run("git", "config", "user.name", "t")
+    (repo / "README").write_text("hi\n")
+    run("git", "add", "README")
+    run("git", "commit", "-q", "-m", "init")
+    return repo
+
+
+class TestWorktreeHelper:
+    def test_find_git_root_inside_repo(self, git_repo):
+        root = wt.find_git_root(git_repo)
+        # Resolve both sides for macOS /private/var vs /var symlink.
+        assert root is not None and root.resolve() == git_repo.resolve()
+
+    def test_find_git_root_in_subdir(self, git_repo):
+        sub = git_repo / "sub"
+        sub.mkdir()
+        root = wt.find_git_root(sub)
+        assert root is not None and root.resolve() == git_repo.resolve()
+
+    def test_find_git_root_outside_repo(self, tmp_path):
+        if not _git_available():
+            pytest.skip("git not installed")
+        outside = tmp_path / "not-a-repo"
+        outside.mkdir()
+        assert wt.find_git_root(outside) is None
+
+    def test_create_and_remove_worktree(self, git_repo):
+        w = wt.create_worktree(git_repo, "abc123")
+        try:
+            assert w.path.exists()
+            assert w.branch == "coder/subagent/abc123"
+            # Worktree starts clean (HEAD checkout, no modifications).
+            assert not wt.has_changes(w)
+        finally:
+            wt.remove_worktree(w)
+        # After removal the directory is gone and the branch is deleted.
+        assert not w.path.exists()
+        result = subprocess.run(
+            ["git", "branch", "--list", w.branch],
+            cwd=git_repo, capture_output=True, text=True,
+        )
+        assert w.branch not in result.stdout
+
+    def test_has_changes_detects_new_file(self, git_repo):
+        w = wt.create_worktree(git_repo, "dirty")
+        try:
+            (w.path / "new.txt").write_text("hello\n")
+            assert wt.has_changes(w) is True
+        finally:
+            wt.remove_worktree(w)
+
+    def test_has_changes_detects_modified_file(self, git_repo):
+        w = wt.create_worktree(git_repo, "mod")
+        try:
+            (w.path / "README").write_text("changed\n")
+            assert wt.has_changes(w) is True
+        finally:
+            wt.remove_worktree(w)
+
+    def test_create_worktree_reuses_stale_branch(self, git_repo):
+        """-B lets us recreate when a stale branch exists from a crashed run."""
+        w1 = wt.create_worktree(git_repo, "stale")
+        wt.remove_worktree(w1)
+        # Simulate a stale branch left behind (no worktree dir).
+        subprocess.run(
+            ["git", "branch", "coder/subagent/stale", "HEAD"],
+            cwd=git_repo, check=True, capture_output=True,
+        )
+        w2 = wt.create_worktree(git_repo, "stale")
+        try:
+            assert w2.path.exists()
+        finally:
+            wt.remove_worktree(w2)

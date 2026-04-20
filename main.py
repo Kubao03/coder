@@ -74,14 +74,18 @@ def print_banner(session: SessionManager, resumed: bool = False):
 def _subagent_listener(preset: str, agent_id: str, kind: str, payload: dict) -> None:
     """Render sub-agent progress to the terminal.
 
-    - kind="start": sub-agent dispatched (payload: {"description": ...})
-    - kind="tool":  sub-agent called a tool (payload: {"name": ..., "input": ...})
-    - kind="end":   sub-agent finished (payload: {"error": bool})
+    - kind="start":    sub-agent dispatched (payload: {"description": ...})
+    - kind="worktree": isolated worktree created (payload: {"path": ..., "branch": ...})
+    - kind="tool":     sub-agent called a tool (payload: {"name": ..., "input": ...})
+    - kind="end":      sub-agent finished (payload: {"error": bool})
     """
     tag = f"{CYAN}[{preset}:{agent_id[-6:]}]{RESET}"
     if kind == "start":
         desc = payload.get("description", "")
         print(f"  {tag} {DIM}▸ {desc}{RESET}")
+    elif kind == "worktree":
+        branch = payload.get("branch", "?")
+        print(f"  {tag} {DIM}⎇ worktree on {branch}{RESET}")
     elif kind == "tool":
         name = payload.get("name", "?")
         summary = _summarize_tool_input(name, payload.get("input", {}))
