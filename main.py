@@ -18,6 +18,7 @@ from tools.file_edit import FileEditTool
 from tools.file_write import FileWriteTool
 from tools.glob_tool import GlobTool
 from tools.grep_tool import GrepTool
+from tools.agent_tool import AgentTool
 
 # ---------------------------------------------------------------------------
 # ANSI styles
@@ -70,10 +71,55 @@ def print_banner(session: SessionManager, resumed: bool = False):
     print()
 
 
+def _subagent_listener(preset: str, agent_id: str, kind: str, payload: dict) -> None:
+    """Render sub-agent progress to the terminal.
+
+    - kind="start": sub-agent dispatched (payload: {"description": ...})
+    - kind="tool":  sub-agent called a tool (payload: {"name": ..., "input": ...})
+    - kind="end":   sub-agent finished (payload: {"error": bool})
+    """
+    tag = f"{CYAN}[{preset}:{agent_id[-6:]}]{RESET}"
+    if kind == "start":
+        desc = payload.get("description", "")
+        print(f"  {tag} {DIM}▸ {desc}{RESET}")
+    elif kind == "tool":
+        name = payload.get("name", "?")
+        summary = _summarize_tool_input(name, payload.get("input", {}))
+        print(f"  {tag} {GRAY}↳ {name}{RESET} {DIM}{summary}{RESET}")
+    elif kind == "end":
+        marker = f"{RED}failed{RESET}" if payload.get("error") else f"{GREEN}done{RESET}"
+        print(f"  {tag} {marker}")
+
+
+def _summarize_tool_input(name: str, input: dict) -> str:
+    """Short one-line param preview for a tool call."""
+    if name == "Bash":
+        return _trunc(input.get("command", ""), 80)
+    if name in ("Read", "Edit", "Write"):
+        return input.get("file_path", "")
+    if name == "Glob":
+        return input.get("pattern", "")
+    if name == "Grep":
+        p = input.get("pattern", "")
+        path = input.get("path", "")
+        return f"{p}  {DIM}{path}{RESET}" if path else p
+    if name == "Agent":
+        return f"{input.get('subagent_type','?')}: {_trunc(input.get('description',''), 60)}"
+    return ""
+
+
+def _trunc(s: str, n: int) -> str:
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
 def make_agent(cwd: str, session: SessionManager) -> AgentLoop:
-    tools = [BashTool(), FileReadTool(), FileEditTool(), FileWriteTool(), GlobTool(), GrepTool()]
+    tools = [
+        BashTool(), FileReadTool(), FileEditTool(), FileWriteTool(),
+        GlobTool(), GrepTool(), AgentTool(),
+    ]
     settings = load_settings(cwd)
     ctx = AgentContext(cwd=cwd, tools=tools, settings=settings)
+    ctx.subagent_listener = _subagent_listener
     pm = PermissionManager(settings, cwd)
     return AgentLoop(ctx, pm, session=session)
 
@@ -87,11 +133,15 @@ async def handle_message(agent: AgentLoop, user_input: str):
                     in_text = True
                 print(text, end="", flush=True)
 
-            case ToolUseStart(name=name):
+            case ToolUseStart(name=name, input=tool_input):
                 if in_text:
                     print()
                     in_text = False
-                print(f"  {MAGENTA}{name}{RESET}")
+                summary = _summarize_tool_input(name, tool_input or {})
+                if summary:
+                    print(f"  {MAGENTA}{name}{RESET} {DIM}{summary}{RESET}")
+                else:
+                    print(f"  {MAGENTA}{name}{RESET}")
 
             case ToolExecResult(data=data, is_error=is_error):
                 color = RED if is_error else DIM

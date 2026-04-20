@@ -39,6 +39,9 @@ class AgentLoop:
         self.context = context
         self.pm = permission_manager
         self.session = session
+        # Expose the permission manager on the context so sub-agents (dispatched
+        # via AgentTool) can reuse it without threading it through every call site.
+        context._pm = permission_manager
         self.model = os.environ.get("MODEL_ID", "claude-opus-4-5")
         self.client = anthropic.AsyncAnthropic()
         self._tool_map = {t.name: t for t in context.tools}
@@ -87,7 +90,6 @@ class AgentLoop:
                                         "id": block.id,
                                         "name": block.name,
                                     }
-                                    yield ToolUseStart(name=block.name, id=block.id)
 
                             case "content_block_stop":
                                 if event.index in pending_tool_blocks:
@@ -99,6 +101,11 @@ class AgentLoop:
                                                 id=b.id, name=b.name, input=b.input,
                                             )
                                             executor.add_tool(block)
+                                            # Yield only after input is fully parsed,
+                                            # so listeners can render parameters.
+                                            yield ToolUseStart(
+                                                name=b.name, id=b.id, input=b.input,
+                                            )
                                             break
 
                     final_message = await stream.get_final_message()

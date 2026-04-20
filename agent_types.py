@@ -29,9 +29,10 @@ class TextDelta:
 
 @dataclass
 class ToolUseStart:
-    """The LLM has started a tool call."""
+    """The LLM has started a tool call. `input` is the fully-parsed tool input."""
     name: str
     id: str
+    input: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
