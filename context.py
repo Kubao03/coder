@@ -2,6 +2,7 @@ import os
 import platform
 import subprocess
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 from tools.base import Tool
@@ -35,6 +36,29 @@ def _is_git_repo(cwd: str) -> bool:
         return False
 
 
+def _current_git_branch(cwd: str) -> str | None:
+    """Return current branch name, or None if not in a repo or in detached HEAD."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode != 0:
+            return None
+        branch = result.stdout.strip()
+        # 'HEAD' means detached — not useful to show as a branch name.
+        if not branch or branch == "HEAD":
+            return None
+        return branch
+    except Exception:
+        return None
+
+
+def _today() -> str:
+    """Today's date in ISO format (YYYY-MM-DD). Wrapped so tests can monkeypatch."""
+    return date.today().isoformat()
+
+
 @dataclass
 class AgentContext:
     """Agent state: working directory, tools, and conversation history."""
@@ -51,12 +75,20 @@ class AgentContext:
         ]
 
         # environment info
+        is_repo = _is_git_repo(self.cwd)
         env_lines = [
             f" - Primary working directory: {self.cwd}",
-            f" - Is a git repository: {'Yes' if _is_git_repo(self.cwd) else 'No'}",
+            f" - Is a git repository: {'Yes' if is_repo else 'No'}",
+        ]
+        if is_repo:
+            branch = _current_git_branch(self.cwd)
+            if branch:
+                env_lines.append(f" - Git branch: {branch}")
+        env_lines += [
             f" - Platform: {platform.system().lower()}",
             f" - Shell: {_detect_shell()}",
             f" - OS Version: {_detect_os_version()}",
+            f" - Today's date: {_today()}",
         ]
         parts.append("\n# Environment\n" + "\n".join(env_lines))
 
