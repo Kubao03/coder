@@ -50,7 +50,18 @@ class TurnComplete:
     text: str
 
 
-StreamEvent = TextDelta | ToolUseStart | ToolExecResult | TurnComplete
+@dataclass
+class UsageSummary:
+    """Token/cost summary emitted after each completed LLM call."""
+    turn: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_usd: float
+
+
+StreamEvent = TextDelta | ToolUseStart | ToolExecResult | TurnComplete | UsageSummary
 
 
 # ---------------------------------------------------------------------------

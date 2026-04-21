@@ -9,8 +9,9 @@ from agent_services import AgentServices
 from permissions import PermissionManager
 from settings import load_settings
 from agent_loop import AgentLoop
-from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete
+from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete, UsageSummary
 from session import SessionManager
+from usage import UsageTracker
 from services.compact import (
     auto_compact, estimate_tokens, compact_conversation,
     COMPACT_USER_PREFIX, _calculate_keep_index, _is_tool_result,
@@ -134,6 +135,7 @@ def make_agent(cwd: str, session: SessionManager) -> AgentLoop:
         hooks=hooks,
         settings=settings,
         subagent_listener=_subagent_listener,
+        usage=UsageTracker(),
     )
     ctx = AgentContext(cwd=cwd, tools=tools)
     return AgentLoop(ctx, services, session=session)
@@ -163,6 +165,21 @@ async def handle_message(agent: AgentLoop, user_input: str):
                 preview = truncate(data)
                 for line in preview.splitlines():
                     print(f"  {color}{line}{RESET}")
+
+            case UsageSummary(
+                turn=turn, input_tokens=inp, output_tokens=out,
+                cache_read_tokens=cr, cache_write_tokens=cw, cost_usd=cost,
+            ):
+                if in_text:
+                    print()
+                    in_text = False
+                parts = [f"in={inp:,}", f"out={out:,}"]
+                if cr:
+                    parts.append(f"cache_read={cr:,}")
+                if cw:
+                    parts.append(f"cache_write={cw:,}")
+                parts.append(f"~${cost:.4f}")
+                print(f"  {GRAY}[turn {turn}] {' '.join(parts)}{RESET}")
 
             case TurnComplete(text=text):
                 if text.startswith("[Permission denied"):
@@ -201,7 +218,17 @@ async def handle_slash(agent: AgentLoop, cmd: str):
     elif name == "/tokens":
         ctx = agent.context
         tokens = estimate_tokens(ctx.messages, ctx.build_system_prompt())
-        print(f"  {DIM}Messages: {len(ctx.messages)}, Tokens (est): {tokens}{RESET}")
+        tracker = agent._services.usage if agent._services else None
+        print(f"  {DIM}Messages: {len(ctx.messages)}, Context tokens (est): {tokens:,}{RESET}")
+        if tracker and tracker.turn_count > 0:
+            print(f"  {DIM}Turns: {tracker.turn_count}{RESET}")
+            print(f"  {DIM}Total input:       {tracker.total_input:>10,}{RESET}")
+            print(f"  {DIM}Total output:      {tracker.total_output:>10,}{RESET}")
+            if tracker.total_cache_read:
+                print(f"  {DIM}Total cache read:  {tracker.total_cache_read:>10,}{RESET}")
+            if tracker.total_cache_write:
+                print(f"  {DIM}Total cache write: {tracker.total_cache_write:>10,}{RESET}")
+            print(f"  {DIM}Total cost:        ${tracker.total_cost_usd:.4f}{RESET}")
 
     elif name == "/clear":
         agent.context.messages.clear()

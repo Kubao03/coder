@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from permissions.manager import PermissionManager
     from hooks.runner import HookRunner
     from settings import Settings
+    from usage import UsageTracker
 
 
 @dataclass
@@ -23,3 +24,4 @@ class AgentServices:
     hooks: "HookRunner"
     settings: "Settings"
     subagent_listener: Callable | None = None
+    usage: "UsageTracker | None" = field(default=None)

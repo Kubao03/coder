@@ -12,7 +12,7 @@ from services.tool_result_storage import process_tool_result_content
 from session import SessionManager
 from agent_types import (
     ToolResult, ToolUseBlock, StreamEvent,
-    TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
+    TextDelta, ToolUseStart, ToolExecResult, TurnComplete, UsageSummary,
     PermissionDeniedError,
 )
 
@@ -171,6 +171,19 @@ class AgentLoop:
                 return
 
             full_text, executor, final_message = result
+
+            # Record token usage and emit a UsageSummary event
+            tracker = self._services.usage if self._services else None
+            if tracker is not None and final_message.usage is not None:
+                turn_usage = tracker.record(self.model, final_message.usage)
+                yield UsageSummary(
+                    turn=turn_usage.turn,
+                    input_tokens=turn_usage.input_tokens,
+                    output_tokens=turn_usage.output_tokens,
+                    cache_read_tokens=turn_usage.cache_read_tokens,
+                    cache_write_tokens=turn_usage.cache_write_tokens,
+                    cost_usd=turn_usage.cost_usd,
+                )
 
             assistant_content = [b.model_dump() for b in final_message.content]
             self._append_message({"role": "assistant", "content": assistant_content})
