@@ -103,6 +103,7 @@ class HookRunner:
     ) -> tuple[int, str, str]:
         """Run a shell command with JSON on stdin. Returns (returncode, stdout, stderr)."""
         stdin_bytes = json.dumps(stdin_data).encode()
+        proc = None
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
@@ -116,10 +117,12 @@ class HookRunner:
             )
             return proc.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             return 1, "", f"Hook timed out after {timeout}s"
         except Exception as e:
             return 1, "", str(e)

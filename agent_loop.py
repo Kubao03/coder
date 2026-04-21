@@ -143,8 +143,14 @@ class AgentLoop:
                         self.context.messages,
                         self.context.build_system_prompt(),
                     )
+                    # Append the original user request to the end of the summary
+                    # so the model sees it explicitly after the context break,
+                    # rather than having to infer it from the summary text.
+                    summary_with_request = (
+                        summary + f"\n\n---\nCurrent user request: {user_message}"
+                    )
                     self.context.messages = [
-                        {"role": "user", "content": COMPACT_USER_PREFIX + summary}
+                        {"role": "user", "content": COMPACT_USER_PREFIX + summary_with_request}
                     ]
                     # retry after compaction
                     result = None
@@ -155,6 +161,12 @@ class AgentLoop:
                             yield event
                 else:
                     raise
+
+            # Guard: _call_api should always yield a result tuple on success.
+            # If it somehow completes without one, abort gracefully.
+            if result is None:
+                yield TurnComplete(text="")
+                return
 
             full_text, executor, final_message = result
 

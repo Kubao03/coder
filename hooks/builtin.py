@@ -31,6 +31,17 @@ _DANGEROUS_PATTERNS: list[tuple[re.Pattern, str]] = [
      "fork bomb"),
     (re.compile(r"\bchmod\s+-R\s+[0-7]*777\s+/"),
      "recursive chmod 777 on root"),
+    # sudo variants of the dangerous rm pattern
+    (re.compile(r"\bsudo\b.*\brm\s+(-[a-zA-Z]*r[a-zA-Z]*f?|--recursive).*\s+(/|~|\$HOME)(\s|$)"),
+     "sudo rm -rf on filesystem root or $HOME"),
+    # Subshell / backtick wrappers that call the format or dd commands
+    (re.compile(r"(`|\$\().*\bmkfs\b"),
+     "subshell invoking filesystem format command"),
+    (re.compile(r"(`|\$\().*\bdd\b.*\bof=/dev/"),
+     "subshell invoking dd to block device"),
+    # eval with any of the core destructive patterns
+    (re.compile(r"\beval\b.*\brm\s+-[a-zA-Z]*r"),
+     "eval wrapping recursive rm"),
 ]
 
 
