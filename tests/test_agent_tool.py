@@ -3,17 +3,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 from coder.agent_types import ToolResult
-from coder.agent_services import AgentServices
-from coder.context import AgentContext
+from coder.core.services import AgentServices
+from coder.core.context import AgentContext
 from coder.hooks import HookRunner, register_builtin_hooks
 from coder.permissions import PermissionManager
-from coder.settings import Settings
-from coder.tools.agent_tool import AgentTool, _filter_tools, _SubagentContext
+from coder.persistence.settings import Settings
+from coder.tools.agent import AgentTool, _filter_tools, _SubagentContext
 from coder.tools.bash import BashTool
 from coder.tools.file_read import FileReadTool
 from coder.subagents.registry import AGENT_REGISTRY, AgentDefinition
 from coder.subagents.general_purpose import GENERAL_PURPOSE
-from coder.services import worktree as wt
+from coder.git import worktree as wt
 
 from tests.test_agent_loop import make_text_stream, make_tool_stream
 
@@ -250,7 +250,7 @@ class TestCallE2E:
     @pytest.mark.asyncio
     async def test_simple_dispatch_returns_final_text(self, ctx, monkeypatch, stub_worktree):
         # Patch the AgentLoop symbol that _run_subagent imports lazily.
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -263,7 +263,7 @@ class TestCallE2E:
 
     @pytest.mark.asyncio
     async def test_child_loop_receives_scoped_context(self, ctx, services, monkeypatch, stub_worktree):
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -290,7 +290,7 @@ class TestCallE2E:
     @pytest.mark.asyncio
     async def test_parent_messages_untouched(self, ctx, monkeypatch, stub_worktree):
         ctx.messages.append({"role": "user", "content": "parent turn"})
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -316,7 +316,7 @@ class TestCallE2E:
         _FakeAgentLoop.scripted_events = [
             ToolUseStart(name="Grep", id="t1", input={"pattern": "foo"}),
         ]
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -351,7 +351,7 @@ class TestCallE2E:
                 raise RuntimeError("boom")
                 yield  # pragma: no cover
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
 
         out = await AgentTool().call(
@@ -369,7 +369,7 @@ class TestCallE2E:
         """A broken listener must not crash sub-agent execution."""
         from dataclasses import replace
         ctx.services = replace(services, subagent_listener=lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad listener")))
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -387,7 +387,7 @@ class TestCallE2E:
                 raise RuntimeError("boom")
                 yield  # pragma: no cover — make this an async generator
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
 
         out = await AgentTool().call(
@@ -412,7 +412,7 @@ class TestWorktreeIsolation:
         self, ctx, pm, monkeypatch, stub_worktree,
     ):
         """Child AgentLoop's context.cwd must be the worktree path, not parent cwd."""
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -433,7 +433,7 @@ class TestWorktreeIsolation:
         monkeypatch.setattr(wt, "create_worktree", _should_not_be_called)
         monkeypatch.setattr(wt, "find_git_root", _should_not_be_called)
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -451,7 +451,7 @@ class TestWorktreeIsolation:
         # If the code accidentally proceeds past the git-root check, fail loudly.
         monkeypatch.setattr(wt, "create_worktree", lambda *a, **kw: pytest.fail("should not create"))
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -468,7 +468,7 @@ class TestWorktreeIsolation:
         ctx.services = replace(services, subagent_listener=lambda preset, inv_id, kind, payload: events_seen.append(
             (kind, payload)
         ))
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -489,7 +489,7 @@ class TestWorktreeIsolation:
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
         # stub_worktree already sets has_changes -> False
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -507,7 +507,7 @@ class TestWorktreeIsolation:
         removes: list = []
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -533,7 +533,7 @@ class TestWorktreeIsolation:
                 raise RuntimeError("boom")
                 yield  # pragma: no cover
 
-        import coder.agent_loop as agent_loop
+        import coder.core.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
 
         out = await AgentTool().call(

@@ -5,16 +5,14 @@ import random
 from typing import Any, AsyncGenerator
 import anthropic
 from .context import AgentContext
-from .agent_services import AgentServices
-from .streaming_executor import StreamingToolExecutor
-from .services.compact import auto_compact, compact_conversation, COMPACT_USER_PREFIX
-from .services.tool_result_storage import process_tool_result_content
-from .session import SessionManager
-from .agent_types import (
-    ToolResult, ToolUseBlock, StreamEvent,
-    TextDelta, ToolUseStart, ToolExecResult, TurnComplete, UsageSummary,
-    PermissionDeniedError,
-)
+from .services import AgentServices
+from .streaming import StreamingToolExecutor
+from ..compaction.compact import auto_compact, compact_conversation, COMPACT_USER_PREFIX
+from ..persistence.tool_results import process_tool_result_content
+from ..persistence.session import SessionManager
+from ..tools.base import ToolResult, ToolUseBlock
+from .events import StreamEvent, TextDelta, ToolUseStart, ToolExecResult, TurnComplete, UsageSummary
+from .errors import PermissionDeniedError
 
 logger = logging.getLogger("coder.agent_loop")
 

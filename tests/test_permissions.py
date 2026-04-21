@@ -1,7 +1,7 @@
 import json
 import pytest
 from unittest.mock import patch
-from coder.settings import Settings
+from coder.persistence.settings import Settings
 from coder.permissions import PermissionManager
 from coder.tools.bash import BashTool
 from coder.tools.file_read import FileReadTool

@@ -1,6 +1,6 @@
 from pathlib import Path
 from .base import Tool
-from ..agent_types import ToolResult
+from .base import ToolResult
 
 
 class FileReadTool(Tool):

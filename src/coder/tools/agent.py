@@ -6,11 +6,12 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from .base import Tool
-from ..context import AgentContext
-from ..agent_services import AgentServices
-from ..agent_types import ToolResult, TurnComplete, ToolUseStart
+from ..core.context import AgentContext
+from ..core.services import AgentServices
+from ..tools.base import ToolResult
+from ..core.events import TurnComplete, ToolUseStart
 from ..subagents.registry import AGENT_REGISTRY, AgentDefinition, all_types
-from ..services import worktree as wt
+from ..git import worktree as wt
 
 
 class AgentTool(Tool):
@@ -160,7 +161,7 @@ async def _run_subagent(
     # Local import: AgentLoop depends on tools indirectly via type hints at
     # runtime, but importing at module load time creates a cycle with main.py's
     # tool construction path. Local import keeps the graph clean.
-    from ..agent_loop import AgentLoop
+    from ..core.agent_loop import AgentLoop
 
     child_tools = _filter_tools(parent_context.tools, definition.tools)
 
@@ -230,7 +231,7 @@ def _build_child_services(parent_context: Any, child_cwd: str) -> AgentServices:
 
     # Fallback: no services on parent (unit tests, direct construction).
     from ..permissions import PermissionManager
-    from ..settings import load_settings
+    from ..persistence.settings import load_settings
     from ..hooks import HookRunner, register_builtin_hooks
     settings = load_settings(parent_context.cwd)
     pm = PermissionManager(settings, parent_context.cwd)

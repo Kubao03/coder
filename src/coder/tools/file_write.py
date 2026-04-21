@@ -1,6 +1,6 @@
 from pathlib import Path
 from .base import Tool
-from ..agent_types import ToolResult
+from .base import ToolResult
 
 # System directories that should never be written to by the agent.
 _BLOCKED_PREFIXES = ("/etc", "/usr", "/bin", "/sbin", "/lib", "/boot", "/sys", "/proc")

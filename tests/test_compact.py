@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from coder.services.compact import (
+from coder.compaction.compact import (
     estimate_tokens,
     format_compact_summary,
     compact_conversation,

@@ -3,8 +3,8 @@ import shutil
 import subprocess
 from unittest.mock import patch
 from pathlib import Path
-import coder.context as context_module
-from coder.context import (
+import coder.core.context as context_module
+from coder.core.context import (
     AgentContext,
     _detect_shell,
     _detect_os_version,

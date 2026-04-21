@@ -1,7 +1,7 @@
 import json
 import pytest
 from pathlib import Path
-from coder.settings import load_settings, update_settings, add_permission_rule, _merge_settings
+from coder.persistence.settings import load_settings, update_settings, add_permission_rule, _merge_settings
 
 
 class TestMergeSettings:
@@ -38,9 +38,9 @@ class TestLoadSettings:
             "permissions": {"allow": ["Read"]},
             "model": "claude-sonnet-4-6",
         }))
-        monkeypatch.setattr("coder.settings.USER_SETTINGS_DIR", user_dir.parent / ".coder")
+        monkeypatch.setattr("coder.persistence.settings.USER_SETTINGS_DIR", user_dir.parent / ".coder")
         # fix: point to the right dir
-        monkeypatch.setattr("coder.settings._user_settings_path", lambda: user_dir / "settings.json")
+        monkeypatch.setattr("coder.persistence.settings._user_settings_path", lambda: user_dir / "settings.json")
 
         settings = load_settings(str(tmp_path))
         assert "Read" in settings.permissions["allow"]
@@ -54,7 +54,7 @@ class TestLoadSettings:
             "model": "user-model",
             "permissions": {"allow": ["Read"]},
         }))
-        monkeypatch.setattr("coder.settings._user_settings_path", lambda: user_dir / "settings.json")
+        monkeypatch.setattr("coder.persistence.settings._user_settings_path", lambda: user_dir / "settings.json")
 
         # project settings
         proj_dir = tmp_path / "project" / ".coder"
@@ -72,7 +72,7 @@ class TestLoadSettings:
 
 class TestUpdateSettings:
     def test_update_creates_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("coder.settings._user_settings_path", lambda: tmp_path / ".coder" / "settings.json")
+        monkeypatch.setattr("coder.persistence.settings._user_settings_path", lambda: tmp_path / ".coder" / "settings.json")
         update_settings("user", str(tmp_path), {"model": "test-model"})
 
         path = tmp_path / ".coder" / "settings.json"
@@ -84,7 +84,7 @@ class TestUpdateSettings:
         settings_path = tmp_path / ".coder" / "settings.json"
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(json.dumps({"model": "old", "permissions": {"allow": ["A"]}}))
-        monkeypatch.setattr("coder.settings._user_settings_path", lambda: settings_path)
+        monkeypatch.setattr("coder.persistence.settings._user_settings_path", lambda: settings_path)
 
         update_settings("user", str(tmp_path), {"permissions": {"allow": ["B"]}})
         data = json.loads(settings_path.read_text())

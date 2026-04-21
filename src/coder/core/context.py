@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
-from .tools.base import Tool
+from ..tools.base import Tool
 
 if TYPE_CHECKING:
-    from .agent_services import AgentServices
+    from .services import AgentServices
 
 
 def _detect_shell() -> str:
