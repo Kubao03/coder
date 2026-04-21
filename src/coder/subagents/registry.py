@@ -51,9 +51,9 @@ def all_types() -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _load_builtins() -> None:
-    from subagents.general_purpose import GENERAL_PURPOSE
-    from subagents.explore import EXPLORE
-    from subagents.plan import PLAN
+    from .general_purpose import GENERAL_PURPOSE
+    from .explore import EXPLORE
+    from .plan import PLAN
     register(GENERAL_PURPOSE)
     register(EXPLORE)
     register(PLAN)

@@ -2,8 +2,8 @@
 
 import json
 import pytest
-from hooks import HookRunner
-from hooks.runner import _matches
+from coder.hooks import HookRunner
+from coder.hooks.runner import _matches
 
 
 # ---------------------------------------------------------------------------

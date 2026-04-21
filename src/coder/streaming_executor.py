@@ -3,11 +3,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, TYPE_CHECKING
 
-from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
-from tools.base import Tool
+from .agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
+from .tools.base import Tool
 
 if TYPE_CHECKING:
-    from agent_services import AgentServices
+    from .agent_services import AgentServices
 
 logger = logging.getLogger("coder.streaming_executor")
 
@@ -39,7 +39,7 @@ class StreamingToolExecutor:
         # Fall back to a no-op runner when services carries no hooks (e.g. tests).
         hooks = services.hooks
         if hooks is None:
-            from hooks import HookRunner
+            from .hooks import HookRunner
             hooks = HookRunner({}, cwd=context.cwd if context else ".")
         self._hooks = hooks
 

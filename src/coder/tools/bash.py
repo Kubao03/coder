@@ -1,6 +1,6 @@
 import asyncio
-from tools.base import Tool
-from agent_types import ToolResult
+from .base import Tool
+from ..agent_types import ToolResult
 
 
 class BashTool(Tool):

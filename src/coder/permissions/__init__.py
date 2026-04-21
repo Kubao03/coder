@@ -1,5 +1,5 @@
-from permissions.manager import PermissionManager
-from permissions.rules import (
+from .manager import PermissionManager
+from .rules import (
     parse_rule,
     match_rule,
     load_rules_from_settings,

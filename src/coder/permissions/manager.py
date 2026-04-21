@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from tools.base import Tool
-from settings import Settings, add_permission_rule
-from permissions.rules import (
+from ..tools.base import Tool
+from ..settings import Settings, add_permission_rule
+from .rules import (
     PermissionRule, PermissionRuleValue,
     parse_rule, match_rule, load_rules_from_settings,
     build_rule_str,

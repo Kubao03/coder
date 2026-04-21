@@ -6,3 +6,5 @@ __pycache__/
 .env
 docs
 .coder
+*.egg-info/
+dist/

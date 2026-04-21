@@ -3,8 +3,8 @@ import shutil
 import subprocess
 from unittest.mock import patch
 from pathlib import Path
-import context as context_module
-from context import (
+import coder.context as context_module
+from coder.context import (
     AgentContext,
     _detect_shell,
     _detect_os_version,
@@ -12,8 +12,8 @@ from context import (
     _current_git_branch,
     _today,
 )
-from tools.bash import BashTool
-from tools.file_read import FileReadTool
+from coder.tools.bash import BashTool
+from coder.tools.file_read import FileReadTool
 
 
 def _git_available() -> bool:

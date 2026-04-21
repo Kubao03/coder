@@ -1,16 +1,16 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from agent_loop import AgentLoop
-from agent_services import AgentServices
-from context import AgentContext
-from permissions import PermissionManager
-from settings import Settings
-from hooks import HookRunner, register_builtin_hooks
-from agent_types import (
+from coder.agent_loop import AgentLoop
+from coder.agent_services import AgentServices
+from coder.context import AgentContext
+from coder.permissions import PermissionManager
+from coder.settings import Settings
+from coder.hooks import HookRunner, register_builtin_hooks
+from coder.agent_types import (
     ToolUseBlock, TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
 )
-from tools.bash import BashTool
-from tools.file_read import FileReadTool
+from coder.tools.bash import BashTool
+from coder.tools.file_read import FileReadTool
 
 
 # --- Helpers to build mock stream ---

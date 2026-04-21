@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 
-from services.tool_result_storage import (
+from coder.services.tool_result_storage import (
     PERSISTED_OUTPUT_TAG,
     PERSISTED_OUTPUT_CLOSING_TAG,
     PREVIEW_SIZE_BYTES,

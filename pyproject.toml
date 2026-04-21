@@ -1,13 +1,13 @@
 [build-system]
 requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "coder-agent"
 version = "0.1.0"
 description = "A code agent built on the Anthropic API, modelled after Claude Code"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
@@ -21,8 +21,11 @@ dev = [
     "mypy>=1.10",
 ]
 
-# Run directly:  python main.py
-# `pip install -e .` / pipx entry point requires R3 (src/ layout + package imports).
+[project.scripts]
+coder = "coder.main:main_entry"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,9 +1,9 @@
 import pytest
 from pathlib import Path
-from tools.file_edit import FileEditTool
-from tools.file_write import FileWriteTool
-from tools.glob_tool import GlobTool
-from tools.grep_tool import GrepTool
+from coder.tools.file_edit import FileEditTool
+from coder.tools.file_write import FileWriteTool
+from coder.tools.glob_tool import GlobTool
+from coder.tools.grep_tool import GrepTool
 
 
 class TestFileEditTool:

@@ -1,6 +1,6 @@
 """Explore sub-agent: fast read-only codebase search specialist."""
 
-from subagents.registry import AgentDefinition
+from .registry import AgentDefinition
 
 
 _SYSTEM_PROMPT = """You are a file search specialist dispatched by a parent coding agent. You excel at navigating and exploring codebases quickly.

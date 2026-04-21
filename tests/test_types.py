@@ -1,4 +1,4 @@
-from agent_types import ToolResult, ToolUseBlock
+from coder.agent_types import ToolResult, ToolUseBlock
 
 
 class TestToolResult:

@@ -1,5 +1,5 @@
 import pytest
-from permissions import parse_rule, match_rule, load_rules_from_settings
+from coder.permissions import parse_rule, match_rule, load_rules_from_settings
 
 
 class TestParseRule:

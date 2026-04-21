@@ -1,6 +1,6 @@
 """Plan sub-agent: read-only software architect for implementation strategy."""
 
-from subagents.registry import AgentDefinition
+from .registry import AgentDefinition
 
 
 _SYSTEM_PROMPT = """You are a software architect and planning specialist dispatched by a parent coding agent. Your role is to explore the codebase and design an implementation plan.

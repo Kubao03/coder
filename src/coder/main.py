@@ -3,27 +3,27 @@ import asyncio
 import os
 import shutil
 from dotenv import load_dotenv
-from logging_config import setup_logging
-from context import AgentContext
-from agent_services import AgentServices
-from permissions import PermissionManager
-from settings import load_settings
-from agent_loop import AgentLoop
-from agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete, UsageSummary
-from session import SessionManager
-from usage import UsageTracker
-from services.compact import (
+from .logging_config import setup_logging
+from .context import AgentContext
+from .agent_services import AgentServices
+from .permissions import PermissionManager
+from .settings import load_settings
+from .agent_loop import AgentLoop
+from .agent_types import TextDelta, ToolUseStart, ToolExecResult, TurnComplete, UsageSummary
+from .session import SessionManager
+from .usage import UsageTracker
+from .services.compact import (
     auto_compact, estimate_tokens, compact_conversation,
     COMPACT_USER_PREFIX, _calculate_keep_index, _is_tool_result,
 )
-from tools.bash import BashTool
-from tools.file_read import FileReadTool
-from tools.file_edit import FileEditTool
-from tools.file_write import FileWriteTool
-from tools.glob_tool import GlobTool
-from tools.grep_tool import GrepTool
-from tools.agent_tool import AgentTool
-from hooks import HookRunner, register_builtin_hooks
+from .tools.bash import BashTool
+from .tools.file_read import FileReadTool
+from .tools.file_edit import FileEditTool
+from .tools.file_write import FileWriteTool
+from .tools.glob_tool import GlobTool
+from .tools.grep_tool import GrepTool
+from .tools.agent_tool import AgentTool
+from .hooks import HookRunner, register_builtin_hooks
 
 # ---------------------------------------------------------------------------
 # ANSI styles
@@ -347,5 +347,10 @@ async def repl():
         print(separator())
 
 
-if __name__ == "__main__":
+def main_entry() -> None:
+    """Entry point for the `coder` CLI command (installed via pip/pipx)."""
     asyncio.run(repl())
+
+
+if __name__ == "__main__":
+    main_entry()

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any
-from agent_types import ToolResult
+from ..agent_types import ToolResult
 
 
 class Tool(ABC):

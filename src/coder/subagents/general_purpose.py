@@ -1,6 +1,6 @@
 """General-purpose sub-agent: inherits all tools, broad research + task execution."""
 
-from subagents.registry import AgentDefinition
+from .registry import AgentDefinition
 
 
 _SYSTEM_PROMPT = """You are a sub-agent dispatched by a parent coding agent. Given the user's message, you should use the tools available to complete the task. Complete the task fully — don't gold-plate, but don't leave it half-done.

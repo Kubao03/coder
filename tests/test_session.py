@@ -1,7 +1,7 @@
 import json
 import pytest
 from pathlib import Path
-from session import SessionManager, _read_session_meta
+from coder.session import SessionManager, _read_session_meta
 
 
 class TestSessionManager:

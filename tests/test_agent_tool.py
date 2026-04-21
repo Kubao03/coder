@@ -2,18 +2,18 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_types import ToolResult
-from agent_services import AgentServices
-from context import AgentContext
-from hooks import HookRunner, register_builtin_hooks
-from permissions import PermissionManager
-from settings import Settings
-from tools.agent_tool import AgentTool, _filter_tools, _SubagentContext
-from tools.bash import BashTool
-from tools.file_read import FileReadTool
-from subagents.registry import AGENT_REGISTRY, AgentDefinition
-from subagents.general_purpose import GENERAL_PURPOSE
-from services import worktree as wt
+from coder.agent_types import ToolResult
+from coder.agent_services import AgentServices
+from coder.context import AgentContext
+from coder.hooks import HookRunner, register_builtin_hooks
+from coder.permissions import PermissionManager
+from coder.settings import Settings
+from coder.tools.agent_tool import AgentTool, _filter_tools, _SubagentContext
+from coder.tools.bash import BashTool
+from coder.tools.file_read import FileReadTool
+from coder.subagents.registry import AGENT_REGISTRY, AgentDefinition
+from coder.subagents.general_purpose import GENERAL_PURPOSE
+from coder.services import worktree as wt
 
 from tests.test_agent_loop import make_text_stream, make_tool_stream
 
@@ -142,10 +142,10 @@ class TestFilterTools:
 
     def test_explore_allow_list_excludes_write_tools(self):
         # Simulate parent with the full tool set; apply Explore's whitelist.
-        from tools.file_edit import FileEditTool
-        from tools.file_write import FileWriteTool
-        from tools.glob_tool import GlobTool
-        from tools.grep_tool import GrepTool
+        from coder.tools.file_edit import FileEditTool
+        from coder.tools.file_write import FileWriteTool
+        from coder.tools.glob_tool import GlobTool
+        from coder.tools.grep_tool import GrepTool
         parent = [
             BashTool(), FileReadTool(), FileEditTool(), FileWriteTool(),
             GlobTool(), GrepTool(), AgentTool(),
@@ -235,7 +235,7 @@ class _FakeAgentLoop:
         _FakeAgentLoop.instances.append(self)
 
     async def run_stream(self, user_message):
-        from agent_types import TurnComplete
+        from coder.agent_types import TurnComplete
         self.user_messages.append(user_message)
         for ev in _FakeAgentLoop.scripted_events:
             yield ev
@@ -250,7 +250,7 @@ class TestCallE2E:
     @pytest.mark.asyncio
     async def test_simple_dispatch_returns_final_text(self, ctx, monkeypatch, stub_worktree):
         # Patch the AgentLoop symbol that _run_subagent imports lazily.
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -263,7 +263,7 @@ class TestCallE2E:
 
     @pytest.mark.asyncio
     async def test_child_loop_receives_scoped_context(self, ctx, services, monkeypatch, stub_worktree):
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -290,7 +290,7 @@ class TestCallE2E:
     @pytest.mark.asyncio
     async def test_parent_messages_untouched(self, ctx, monkeypatch, stub_worktree):
         ctx.messages.append({"role": "user", "content": "parent turn"})
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -302,7 +302,7 @@ class TestCallE2E:
     @pytest.mark.asyncio
     async def test_listener_receives_start_tool_end(self, ctx, services, monkeypatch):
         """The parent UI can watch sub-agent progress via services.subagent_listener."""
-        from agent_types import ToolUseStart
+        from coder.agent_types import ToolUseStart
         from dataclasses import replace
 
         events_seen: list[tuple] = []
@@ -316,7 +316,7 @@ class TestCallE2E:
         _FakeAgentLoop.scripted_events = [
             ToolUseStart(name="Grep", id="t1", input={"pattern": "foo"}),
         ]
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -351,7 +351,7 @@ class TestCallE2E:
                 raise RuntimeError("boom")
                 yield  # pragma: no cover
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
 
         out = await AgentTool().call(
@@ -369,7 +369,7 @@ class TestCallE2E:
         """A broken listener must not crash sub-agent execution."""
         from dataclasses import replace
         ctx.services = replace(services, subagent_listener=lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad listener")))
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -387,7 +387,7 @@ class TestCallE2E:
                 raise RuntimeError("boom")
                 yield  # pragma: no cover — make this an async generator
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
 
         out = await AgentTool().call(
@@ -412,7 +412,7 @@ class TestWorktreeIsolation:
         self, ctx, pm, monkeypatch, stub_worktree,
     ):
         """Child AgentLoop's context.cwd must be the worktree path, not parent cwd."""
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -433,7 +433,7 @@ class TestWorktreeIsolation:
         monkeypatch.setattr(wt, "create_worktree", _should_not_be_called)
         monkeypatch.setattr(wt, "find_git_root", _should_not_be_called)
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -451,7 +451,7 @@ class TestWorktreeIsolation:
         # If the code accidentally proceeds past the git-root check, fail loudly.
         monkeypatch.setattr(wt, "create_worktree", lambda *a, **kw: pytest.fail("should not create"))
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -468,7 +468,7 @@ class TestWorktreeIsolation:
         ctx.services = replace(services, subagent_listener=lambda preset, inv_id, kind, payload: events_seen.append(
             (kind, payload)
         ))
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         await AgentTool().call(
@@ -489,7 +489,7 @@ class TestWorktreeIsolation:
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
         # stub_worktree already sets has_changes -> False
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -507,7 +507,7 @@ class TestWorktreeIsolation:
         removes: list = []
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
         out = await AgentTool().call(
@@ -533,7 +533,7 @@ class TestWorktreeIsolation:
                 raise RuntimeError("boom")
                 yield  # pragma: no cover
 
-        import agent_loop
+        import coder.agent_loop as agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _Boom)
 
         out = await AgentTool().call(

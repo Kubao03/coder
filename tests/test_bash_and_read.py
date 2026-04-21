@@ -1,8 +1,8 @@
 import pytest
 import tempfile
 from pathlib import Path
-from tools.bash import BashTool
-from tools.file_read import FileReadTool
+from coder.tools.bash import BashTool
+from coder.tools.file_read import FileReadTool
 
 
 class TestBashTool:

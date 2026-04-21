@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any, Callable
 from uuid import uuid4
 
-from tools.base import Tool
-from context import AgentContext
-from agent_services import AgentServices
-from agent_types import ToolResult, TurnComplete, ToolUseStart
-from subagents.registry import AGENT_REGISTRY, AgentDefinition, all_types
-from services import worktree as wt
+from .base import Tool
+from ..context import AgentContext
+from ..agent_services import AgentServices
+from ..agent_types import ToolResult, TurnComplete, ToolUseStart
+from ..subagents.registry import AGENT_REGISTRY, AgentDefinition, all_types
+from ..services import worktree as wt
 
 
 class AgentTool(Tool):
@@ -160,7 +160,7 @@ async def _run_subagent(
     # Local import: AgentLoop depends on tools indirectly via type hints at
     # runtime, but importing at module load time creates a cycle with main.py's
     # tool construction path. Local import keeps the graph clean.
-    from agent_loop import AgentLoop
+    from ..agent_loop import AgentLoop
 
     child_tools = _filter_tools(parent_context.tools, definition.tools)
 
@@ -213,7 +213,7 @@ def _build_child_services(parent_context: Any, child_cwd: str) -> AgentServices:
       audit log land in the right directory.
     - Inherits the parent listener so the UI can track sub-agent progress.
     """
-    from hooks import HookRunner, register_builtin_hooks
+    from ..hooks import HookRunner, register_builtin_hooks
 
     parent_services = parent_context.services
 
@@ -229,9 +229,9 @@ def _build_child_services(parent_context: Any, child_cwd: str) -> AgentServices:
         )
 
     # Fallback: no services on parent (unit tests, direct construction).
-    from permissions import PermissionManager
-    from settings import load_settings
-    from hooks import HookRunner, register_builtin_hooks
+    from ..permissions import PermissionManager
+    from ..settings import load_settings
+    from ..hooks import HookRunner, register_builtin_hooks
     settings = load_settings(parent_context.cwd)
     pm = PermissionManager(settings, parent_context.cwd)
     hooks = HookRunner({}, cwd=child_cwd, session_id="")

@@ -1,11 +1,11 @@
 import json
 import pytest
 from unittest.mock import patch
-from settings import Settings
-from permissions import PermissionManager
-from tools.bash import BashTool
-from tools.file_read import FileReadTool
-from tools.file_write import FileWriteTool
+from coder.settings import Settings
+from coder.permissions import PermissionManager
+from coder.tools.bash import BashTool
+from coder.tools.file_read import FileReadTool
+from coder.tools.file_write import FileWriteTool
 
 
 def _make_pm(allow=None, deny=None):

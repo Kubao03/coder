@@ -2,9 +2,9 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from streaming_executor import StreamingToolExecutor, TrackedTool
-from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
-from tools.base import Tool
+from coder.streaming_executor import StreamingToolExecutor, TrackedTool
+from coder.agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
+from coder.tools.base import Tool
 
 
 # --- Helpers ---

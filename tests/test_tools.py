@@ -1,6 +1,6 @@
 import pytest
-from agent_types import ToolResult
-from tools.base import Tool
+from coder.agent_types import ToolResult
+from coder.tools.base import Tool
 
 
 class ConcreteTool(Tool):
