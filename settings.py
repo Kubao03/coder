@@ -40,6 +40,22 @@ class Settings:
     _user_raw: dict[str, Any] = field(default_factory=dict, repr=False)
     _project_raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
+    def iter_permission_layers(self) -> list[tuple[str, list[str], list[str]]]:
+        """Return [(source, allow_list, deny_list)] for each settings layer.
+
+        Lets PermissionManager load rules with source metadata without
+        accessing private _user_raw / _project_raw fields directly.
+        """
+        layers = []
+        for source, raw in (("user", self._user_raw), ("project", self._project_raw)):
+            perms = raw.get("permissions", {})
+            layers.append((
+                source,
+                perms.get("allow", []),
+                perms.get("deny", []),
+            ))
+        return layers
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     """Read a JSON file, returning empty dict if missing or invalid."""

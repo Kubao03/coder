@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from tools.base import Tool
 from context import AgentContext
+from agent_services import AgentServices
 from agent_types import ToolResult, TurnComplete, ToolUseStart
 from subagents.registry import AGENT_REGISTRY, AgentDefinition, all_types
 from services import worktree as wt
@@ -100,7 +101,7 @@ class AgentTool(Tool):
         # Each AgentTool invocation gets its own id for display attribution
         # (multiple sub-agents running in parallel interleave their lines).
         invocation_id = uuid4().hex
-        listener = getattr(context, "subagent_listener", None)
+        listener = context.services.subagent_listener if context.services else None
         _notify(listener, agent_type, invocation_id, "start", {"description": description})
 
         try:
@@ -126,6 +127,9 @@ class _SubagentContext(AgentContext):
     """
 
     def __init__(self, *, system_prompt_override: str, **kwargs):
+        # Strip any lingering settings= kwarg from older callers so we don't
+        # pass an unknown field to AgentContext (which no longer has settings).
+        kwargs.pop("settings", None)
         super().__init__(**kwargs)
         self._system_prompt_override = system_prompt_override
 
@@ -175,20 +179,14 @@ async def _run_subagent(
     child_ctx = _SubagentContext(
         cwd=child_cwd,
         tools=child_tools,
-        settings=parent_context.settings,
         messages=[],
         system_prompt_override=definition.system_prompt,
     )
 
-    # Parent permission manager is attached to the context by AgentLoop as `_pm`.
-    # Falls back to a fresh instance if not present (e.g. tests).
-    pm = getattr(parent_context, "_pm", None)
-    if pm is None:
-        from permissions import PermissionManager
-        pm = PermissionManager(parent_context.settings, parent_context.cwd)
+    child_services = _build_child_services(parent_context, child_cwd)
 
     # Sub-agent runs without its own session file (MVP — transient).
-    child_loop = AgentLoop(child_ctx, pm, session=None)
+    child_loop = AgentLoop(child_ctx, child_services, session=None)
 
     final_text = ""
     try:
@@ -205,6 +203,40 @@ async def _run_subagent(
             final_text = _finalize_worktree(worktree_obj, final_text)
 
     return final_text or "(sub-agent produced no final text)"
+
+
+def _build_child_services(parent_context: Any, child_cwd: str) -> AgentServices:
+    """Build AgentServices for a sub-agent.
+
+    - Reuses parent's PermissionManager and settings.
+    - Builds a fresh HookRunner scoped to the child cwd so shell hooks and the
+      audit log land in the right directory.
+    - Inherits the parent listener so the UI can track sub-agent progress.
+    """
+    from hooks import HookRunner, register_builtin_hooks
+
+    parent_services = parent_context.services
+
+    if parent_services is not None:
+        hooks_config = parent_services.settings.hooks if parent_services.settings else {}
+        child_hooks = HookRunner(hooks_config, cwd=child_cwd, session_id="")
+        register_builtin_hooks(child_hooks)
+        return AgentServices(
+            permissions=parent_services.permissions,
+            hooks=child_hooks,
+            settings=parent_services.settings,
+            subagent_listener=parent_services.subagent_listener,
+        )
+
+    # Fallback: no services on parent (unit tests, direct construction).
+    from permissions import PermissionManager
+    from settings import load_settings
+    from hooks import HookRunner, register_builtin_hooks
+    settings = load_settings(parent_context.cwd)
+    pm = PermissionManager(settings, parent_context.cwd)
+    hooks = HookRunner({}, cwd=child_cwd, session_id="")
+    register_builtin_hooks(hooks)
+    return AgentServices(permissions=pm, hooks=hooks, settings=settings)
 
 
 def _setup_worktree(parent_cwd: str, tag: str) -> wt.Worktree:

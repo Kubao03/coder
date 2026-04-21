@@ -5,7 +5,7 @@ from typing import Any, AsyncGenerator
 import anthropic
 from dotenv import load_dotenv
 from context import AgentContext
-from permissions import PermissionManager
+from agent_services import AgentServices
 from streaming_executor import StreamingToolExecutor
 from services.compact import auto_compact, compact_conversation, COMPACT_USER_PREFIX
 from services.tool_result_storage import process_tool_result_content
@@ -33,15 +33,16 @@ class AgentLoop:
     def __init__(
         self,
         context: AgentContext,
-        permission_manager: PermissionManager,
+        services: AgentServices,
         session: SessionManager | None = None,
     ):
         self.context = context
-        self.pm = permission_manager
+        self._services = services
+        self.pm = services.permissions
         self.session = session
-        # Expose the permission manager on the context so sub-agents (dispatched
-        # via AgentTool) can reuse it without threading it through every call site.
-        context._pm = permission_manager
+        # Attach services to context so sub-agents (via AgentTool) can
+        # inherit them without an extra parameter to tool.call().
+        context.services = services
         self.model = os.environ.get("MODEL_ID", "claude-opus-4-5")
         self.client = anthropic.AsyncAnthropic()
         self._tool_map = {t.name: t for t in context.tools}
@@ -74,7 +75,7 @@ class AgentLoop:
                     messages=self.context.messages,
                 ) as stream:
                     full_text = ""
-                    executor = StreamingToolExecutor(self._tool_map, self.pm, self.context)
+                    executor = StreamingToolExecutor(self._tool_map, self._services, self.context)
                     pending_tool_blocks: dict[int, dict] = {}
 
                     async for event in stream:

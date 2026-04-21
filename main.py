@@ -3,6 +3,7 @@ import asyncio
 import os
 import shutil
 from context import AgentContext
+from agent_services import AgentServices
 from permissions import PermissionManager
 from settings import load_settings
 from agent_loop import AgentLoop
@@ -19,6 +20,7 @@ from tools.file_write import FileWriteTool
 from tools.glob_tool import GlobTool
 from tools.grep_tool import GrepTool
 from tools.agent_tool import AgentTool
+from hooks import HookRunner, register_builtin_hooks
 
 # ---------------------------------------------------------------------------
 # ANSI styles
@@ -122,10 +124,17 @@ def make_agent(cwd: str, session: SessionManager) -> AgentLoop:
         GlobTool(), GrepTool(), AgentTool(),
     ]
     settings = load_settings(cwd)
-    ctx = AgentContext(cwd=cwd, tools=tools, settings=settings)
-    ctx.subagent_listener = _subagent_listener
     pm = PermissionManager(settings, cwd)
-    return AgentLoop(ctx, pm, session=session)
+    hooks = HookRunner(settings.hooks, cwd=cwd, session_id=session.session_id)
+    register_builtin_hooks(hooks)
+    services = AgentServices(
+        permissions=pm,
+        hooks=hooks,
+        settings=settings,
+        subagent_listener=_subagent_listener,
+    )
+    ctx = AgentContext(cwd=cwd, tools=tools)
+    return AgentLoop(ctx, services, session=session)
 
 
 async def handle_message(agent: AgentLoop, user_input: str):

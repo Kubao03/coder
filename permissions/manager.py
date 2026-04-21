@@ -33,22 +33,9 @@ class PermissionManager:
         self._session_rules: list[PermissionRule] = []
 
         # load persistent rules from merged settings
-        perms = settings.permissions
         self._rules: list[PermissionRule] = []
-        # user-level rules
-        user_perms = settings._user_raw.get("permissions", {})
-        self._rules.extend(load_rules_from_settings(
-            user_perms.get("allow", []),
-            user_perms.get("deny", []),
-            source="user",
-        ))
-        # project-level rules
-        proj_perms = settings._project_raw.get("permissions", {})
-        self._rules.extend(load_rules_from_settings(
-            proj_perms.get("allow", []),
-            proj_perms.get("deny", []),
-            source="project",
-        ))
+        for source, allow_list, deny_list in settings.iter_permission_layers():
+            self._rules.extend(load_rules_from_settings(allow_list, deny_list, source=source))
 
     def _find_matching_rule(
         self, tool: Tool, args: dict, behavior: str, sources: list[PermissionRule] | None = None,

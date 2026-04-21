@@ -46,6 +46,14 @@ class FakePermissionManager:
         return tool.name not in self._deny
 
 
+class FakeServices:
+    """Minimal services stub for executor tests — no real hooks or settings needed."""
+
+    def __init__(self, deny_names: set[str] | None = None):
+        self.permissions = FakePermissionManager(deny_names)
+        self.hooks = None  # executor falls back gracefully when hooks is None
+
+
 def make_block(name: str, tool_id: str, input_: dict | None = None) -> ToolUseBlock:
     return ToolUseBlock(id=tool_id, name=name, input=input_ or {})
 
@@ -56,7 +64,7 @@ class TestStreamingExecutor:
     @pytest.mark.asyncio
     async def test_single_tool_executes(self):
         read = FakeTool("Read", read_only=True)
-        executor = StreamingToolExecutor({"Read": read}, FakePermissionManager(), None)
+        executor = StreamingToolExecutor({"Read": read}, FakeServices(), None)
 
         executor.add_tool(make_block("Read", "t1", {"file_path": "/a"}))
         results = [r async for r in executor.get_results()]
@@ -80,7 +88,7 @@ class TestStreamingExecutor:
         r1 = TimedTool("Read1", read_only=True)
         r2 = TimedTool("Read2", read_only=True)
         tool_map = {"Read1": r1, "Read2": r2}
-        executor = StreamingToolExecutor(tool_map, FakePermissionManager(), None)
+        executor = StreamingToolExecutor(tool_map, FakeServices(), None)
 
         executor.add_tool(make_block("Read1", "t1"))
         executor.add_tool(make_block("Read2", "t2"))
@@ -106,7 +114,7 @@ class TestStreamingExecutor:
         read = TimedTool("Read", read_only=True)
         bash = TimedTool("Bash", read_only=False)
         tool_map = {"Read": read, "Bash": bash}
-        executor = StreamingToolExecutor(tool_map, FakePermissionManager(), None)
+        executor = StreamingToolExecutor(tool_map, FakeServices(), None)
 
         executor.add_tool(make_block("Read", "t1"))
         executor.add_tool(make_block("Bash", "t2"))
@@ -118,7 +126,7 @@ class TestStreamingExecutor:
 
     @pytest.mark.asyncio
     async def test_unknown_tool_returns_error(self):
-        executor = StreamingToolExecutor({}, FakePermissionManager(), None)
+        executor = StreamingToolExecutor({}, FakeServices(), None)
 
         executor.add_tool(make_block("NoSuchTool", "t1"))
         results = [r async for r in executor.get_results()]
@@ -130,8 +138,8 @@ class TestStreamingExecutor:
     @pytest.mark.asyncio
     async def test_permission_denied_raises_error(self):
         bash = FakeTool("Bash", read_only=False)
-        pm = FakePermissionManager(deny_names={"Bash"})
-        executor = StreamingToolExecutor({"Bash": bash}, pm, None)
+        services = FakeServices(deny_names={"Bash"})
+        executor = StreamingToolExecutor({"Bash": bash}, services, None)
 
         executor.add_tool(make_block("Bash", "t1", {"command": "rm -rf /"}))
         with pytest.raises(PermissionDeniedError):
@@ -154,7 +162,7 @@ class TestStreamingExecutor:
         slow = SlowTool("Slow", read_only=True)
         fast = FastTool("Fast", read_only=True)
         tool_map = {"Slow": slow, "Fast": fast}
-        executor = StreamingToolExecutor(tool_map, FakePermissionManager(), None)
+        executor = StreamingToolExecutor(tool_map, FakeServices(), None)
 
         executor.add_tool(make_block("Slow", "t1"))
         executor.add_tool(make_block("Fast", "t2"))
@@ -166,7 +174,7 @@ class TestStreamingExecutor:
     @pytest.mark.asyncio
     async def test_get_tool_results_returns_pairs(self):
         read = FakeTool("Read", read_only=True)
-        executor = StreamingToolExecutor({"Read": read}, FakePermissionManager(), None)
+        executor = StreamingToolExecutor({"Read": read}, FakeServices(), None)
 
         block = make_block("Read", "t1")
         executor.add_tool(block)
@@ -190,7 +198,7 @@ class TestStreamingExecutor:
         read = TrackedFakeTool("Read", read_only=True)
         bash = TrackedFakeTool("Bash", read_only=False)
         tool_map = {"Read": read, "Bash": bash}
-        executor = StreamingToolExecutor(tool_map, FakePermissionManager(), None)
+        executor = StreamingToolExecutor(tool_map, FakeServices(), None)
 
         executor.add_tool(make_block("Read", "t1"))
         executor.add_tool(make_block("Read", "t2"))

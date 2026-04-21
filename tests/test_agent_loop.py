@@ -1,9 +1,11 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from agent_loop import AgentLoop
+from agent_services import AgentServices
 from context import AgentContext
 from permissions import PermissionManager
 from settings import Settings
+from hooks import HookRunner, register_builtin_hooks
 from agent_types import (
     ToolUseBlock, TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
 )
@@ -94,29 +96,32 @@ def ctx(tmp_path):
 
 
 @pytest.fixture
-def pm(tmp_path):
+def services(tmp_path):
     settings = Settings(
         permissions={"allow": [], "deny": []},
         _user_raw={},
         _project_raw={},
     )
-    return PermissionManager(settings, cwd=str(tmp_path))
+    pm = PermissionManager(settings, cwd=str(tmp_path))
+    hooks = HookRunner({}, cwd=str(tmp_path), session_id="test")
+    register_builtin_hooks(hooks)
+    return AgentServices(permissions=pm, hooks=hooks, settings=settings)
 
 
 # --- Tests ---
 
 class TestAgentLoop:
     @pytest.mark.asyncio
-    async def test_plain_text_response(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
+    async def test_plain_text_response(self, ctx, services):
+        loop = AgentLoop(ctx, services)
         with patch.object(loop.client.messages, "stream", return_value=make_text_stream("Hello!")):
             result = await loop.run("hi")
         assert result == "Hello!"
         assert ctx.messages[-1]["role"] == "assistant"
 
     @pytest.mark.asyncio
-    async def test_stream_text_deltas(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
+    async def test_stream_text_deltas(self, ctx, services):
+        loop = AgentLoop(ctx, services)
         with patch.object(loop.client.messages, "stream", return_value=make_text_stream("AB")):
             events = [e async for e in loop.run_stream("hi")]
         text_deltas = [e for e in events if isinstance(e, TextDelta)]
@@ -127,8 +132,8 @@ class TestAgentLoop:
         assert events[-1].text == "AB"
 
     @pytest.mark.asyncio
-    async def test_single_tool_call(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
+    async def test_single_tool_call(self, ctx, services):
+        loop = AgentLoop(ctx, services)
         tool_stream = make_tool_stream("Bash", "tu_1", {"command": "echo hi"})
         final_stream = make_text_stream("Done")
         with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
@@ -138,8 +143,8 @@ class TestAgentLoop:
         assert len(ctx.messages) == 4
 
     @pytest.mark.asyncio
-    async def test_stream_tool_events(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
+    async def test_stream_tool_events(self, ctx, services):
+        loop = AgentLoop(ctx, services)
         tool_stream = make_tool_stream("Bash", "tu_1", {"command": "echo hi"})
         final_stream = make_text_stream("Done")
         with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):
@@ -152,8 +157,8 @@ class TestAgentLoop:
         assert not tool_results[0].is_error
 
     @pytest.mark.asyncio
-    async def test_permission_denied(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
+    async def test_permission_denied(self, ctx, services):
+        loop = AgentLoop(ctx, services)
         tool_stream = make_tool_stream("Bash", "tu_1", {"command": "rm -rf /"})
         with patch.object(loop.client.messages, "stream", side_effect=[tool_stream]):
             result = await loop.run("delete everything")
@@ -166,8 +171,8 @@ class TestAgentLoop:
         assert "user denied" in tool_result_msg["content"][0]["content"].lower()
 
     @pytest.mark.asyncio
-    async def test_unknown_tool(self, ctx, pm):
-        loop = AgentLoop(ctx, pm)
+    async def test_unknown_tool(self, ctx, services):
+        loop = AgentLoop(ctx, services)
         tool_stream = make_tool_stream("NonExistentTool", "tu_1", {})
         final_stream = make_text_stream("ok")
         with patch.object(loop.client.messages, "stream", side_effect=[tool_stream, final_stream]):

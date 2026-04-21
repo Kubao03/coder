@@ -8,7 +8,7 @@ from typing import Any, TYPE_CHECKING
 from tools.base import Tool
 
 if TYPE_CHECKING:
-    from settings import Settings
+    from agent_services import AgentServices
 
 
 def _detect_shell() -> str:
@@ -65,8 +65,8 @@ class AgentContext:
 
     cwd: str
     tools: list[Tool]
-    settings: "Settings | None" = None
     messages: list[dict[str, Any]] = field(default_factory=list)
+    services: "AgentServices | None" = None
 
     def build_system_prompt(self) -> str:
         """Assemble the system prompt with environment info, CODER.md, and tool list."""

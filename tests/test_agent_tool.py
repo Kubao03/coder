@@ -3,7 +3,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_types import ToolResult
+from agent_services import AgentServices
 from context import AgentContext
+from hooks import HookRunner, register_builtin_hooks
 from permissions import PermissionManager
 from settings import Settings
 from tools.agent_tool import AgentTool, _filter_tools, _SubagentContext
@@ -21,9 +23,16 @@ from tests.test_agent_loop import make_text_stream, make_tool_stream
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def ctx(tmp_path):
-    tools = [BashTool(), FileReadTool(), AgentTool()]
-    return AgentContext(cwd=str(tmp_path), tools=tools)
+def services(tmp_path):
+    settings = Settings(
+        permissions={"allow": [], "deny": []},
+        _user_raw={},
+        _project_raw={},
+    )
+    pm = PermissionManager(settings, cwd=str(tmp_path))
+    hooks = HookRunner({}, cwd=str(tmp_path), session_id="test")
+    register_builtin_hooks(hooks)
+    return AgentServices(permissions=pm, hooks=hooks, settings=settings)
 
 
 @pytest.fixture
@@ -34,6 +43,12 @@ def pm(tmp_path):
         _project_raw={},
     )
     return PermissionManager(settings, cwd=str(tmp_path))
+
+
+@pytest.fixture
+def ctx(tmp_path, services):
+    tools = [BashTool(), FileReadTool(), AgentTool()]
+    return AgentContext(cwd=str(tmp_path), tools=tools, services=services)
 
 
 @pytest.fixture
@@ -176,7 +191,6 @@ class TestSubagentContext:
         ctx = _SubagentContext(
             cwd=str(tmp_path),
             tools=[],
-            settings=None,
             messages=[],
             system_prompt_override="hello sub-agent",
         )
@@ -213,9 +227,9 @@ class _FakeAgentLoop:
     instances: list["_FakeAgentLoop"] = []
     scripted_events: list = []  # optional extra events to yield before TurnComplete
 
-    def __init__(self, context, pm, session=None):
+    def __init__(self, context, services, session=None):
         self.context = context
-        self.pm = pm
+        self.services = services
         self.session = session
         self.user_messages: list[str] = []
         _FakeAgentLoop.instances.append(self)
@@ -234,8 +248,7 @@ class TestCallE2E:
         _FakeAgentLoop.scripted_events = []
 
     @pytest.mark.asyncio
-    async def test_simple_dispatch_returns_final_text(self, ctx, pm, monkeypatch, stub_worktree):
-        ctx._pm = pm
+    async def test_simple_dispatch_returns_final_text(self, ctx, monkeypatch, stub_worktree):
         # Patch the AgentLoop symbol that _run_subagent imports lazily.
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
@@ -249,8 +262,7 @@ class TestCallE2E:
         assert out.data == "report for: please investigate"
 
     @pytest.mark.asyncio
-    async def test_child_loop_receives_scoped_context(self, ctx, pm, monkeypatch, stub_worktree):
-        ctx._pm = pm
+    async def test_child_loop_receives_scoped_context(self, ctx, services, monkeypatch, stub_worktree):
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
@@ -260,8 +272,8 @@ class TestCallE2E:
 
         assert len(_FakeAgentLoop.instances) == 1
         child = _FakeAgentLoop.instances[0]
-        # Sub-agent inherits permission manager from the parent.
-        assert child.pm is pm
+        # Sub-agent inherits permission manager from the parent services.
+        assert child.services.permissions is services.permissions
         # With isolation="worktree", child cwd is the worktree path, not parent cwd.
         assert child.context.cwd != ctx.cwd
         # Sub-agent gets its own messages list — independent from parent.
@@ -276,8 +288,7 @@ class TestCallE2E:
         assert child.session is None
 
     @pytest.mark.asyncio
-    async def test_parent_messages_untouched(self, ctx, pm, monkeypatch, stub_worktree):
-        ctx._pm = pm
+    async def test_parent_messages_untouched(self, ctx, monkeypatch, stub_worktree):
         ctx.messages.append({"role": "user", "content": "parent turn"})
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
@@ -289,15 +300,17 @@ class TestCallE2E:
         assert ctx.messages == [{"role": "user", "content": "parent turn"}]
 
     @pytest.mark.asyncio
-    async def test_listener_receives_start_tool_end(self, ctx, pm, monkeypatch):
-        """The parent UI can watch sub-agent progress via context.subagent_listener."""
+    async def test_listener_receives_start_tool_end(self, ctx, services, monkeypatch):
+        """The parent UI can watch sub-agent progress via services.subagent_listener."""
         from agent_types import ToolUseStart
-        ctx._pm = pm
+        from dataclasses import replace
 
         events_seen: list[tuple] = []
-        ctx.subagent_listener = lambda preset, inv_id, kind, payload: events_seen.append(
+        listener = lambda preset, inv_id, kind, payload: events_seen.append(
             (preset, kind, payload)
         )
+        # Swap listener into services so AgentTool can read it.
+        ctx.services = replace(services, subagent_listener=listener)
 
         # Script: sub-agent fires one ToolUseStart (Grep) before TurnComplete.
         _FakeAgentLoop.scripted_events = [
@@ -324,12 +337,11 @@ class TestCallE2E:
         assert events_seen[2][2]["error"] is False
 
     @pytest.mark.asyncio
-    async def test_listener_end_marked_error_on_exception(self, ctx, pm, monkeypatch, stub_worktree):
-        ctx._pm = pm
+    async def test_listener_end_marked_error_on_exception(self, ctx, services, monkeypatch, stub_worktree):
+        from dataclasses import replace
+
         events_seen: list[tuple] = []
-        ctx.subagent_listener = lambda preset, inv_id, kind, payload: events_seen.append(
-            (preset, kind, payload)
-        )
+        ctx.services = replace(services, subagent_listener=lambda p, i, k, pl: events_seen.append((p, k, pl)))
 
         class _Boom:
             def __init__(self, *a, **kw):
@@ -353,10 +365,10 @@ class TestCallE2E:
         assert events_seen[-1][2]["error"] is True
 
     @pytest.mark.asyncio
-    async def test_listener_errors_swallowed(self, ctx, pm, monkeypatch, stub_worktree):
+    async def test_listener_errors_swallowed(self, ctx, services, monkeypatch, stub_worktree):
         """A broken listener must not crash sub-agent execution."""
-        ctx._pm = pm
-        ctx.subagent_listener = lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad listener"))
+        from dataclasses import replace
+        ctx.services = replace(services, subagent_listener=lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad listener")))
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
@@ -366,9 +378,7 @@ class TestCallE2E:
         assert not out.is_error
 
     @pytest.mark.asyncio
-    async def test_exception_surfaces_as_error_result(self, ctx, pm, monkeypatch, stub_worktree):
-        ctx._pm = pm
-
+    async def test_exception_surfaces_as_error_result(self, ctx, monkeypatch, stub_worktree):
         class _Boom:
             def __init__(self, *a, **kw):
                 pass
@@ -402,7 +412,6 @@ class TestWorktreeIsolation:
         self, ctx, pm, monkeypatch, stub_worktree,
     ):
         """Child AgentLoop's context.cwd must be the worktree path, not parent cwd."""
-        ctx._pm = pm
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
@@ -415,9 +424,8 @@ class TestWorktreeIsolation:
         assert "wt-" in child.context.cwd
 
     @pytest.mark.asyncio
-    async def test_explore_does_not_create_worktree(self, ctx, pm, monkeypatch):
+    async def test_explore_does_not_create_worktree(self, ctx, monkeypatch):
         """Read-only presets skip worktree creation entirely — no git calls made."""
-        ctx._pm = pm
 
         def _should_not_be_called(*a, **kw):
             raise AssertionError("worktree API hit for non-isolated preset")
@@ -437,9 +445,8 @@ class TestWorktreeIsolation:
         assert child.context.cwd == ctx.cwd
 
     @pytest.mark.asyncio
-    async def test_non_git_cwd_hard_errors(self, ctx, pm, monkeypatch):
+    async def test_non_git_cwd_hard_errors(self, ctx, monkeypatch):
         """general-purpose in a non-git dir returns an error result, doesn't silently fall back."""
-        ctx._pm = pm
         monkeypatch.setattr(wt, "find_git_root", lambda cwd: None)
         # If the code accidentally proceeds past the git-root check, fail loudly.
         monkeypatch.setattr(wt, "create_worktree", lambda *a, **kw: pytest.fail("should not create"))
@@ -455,12 +462,12 @@ class TestWorktreeIsolation:
         assert "not inside a git repository" in out.data
 
     @pytest.mark.asyncio
-    async def test_worktree_event_fired(self, ctx, pm, monkeypatch, stub_worktree):
-        ctx._pm = pm
+    async def test_worktree_event_fired(self, ctx, services, monkeypatch, stub_worktree):
+        from dataclasses import replace
         events_seen: list[tuple] = []
-        ctx.subagent_listener = lambda preset, inv_id, kind, payload: events_seen.append(
+        ctx.services = replace(services, subagent_listener=lambda preset, inv_id, kind, payload: events_seen.append(
             (kind, payload)
-        )
+        ))
         import agent_loop
         monkeypatch.setattr(agent_loop, "AgentLoop", _FakeAgentLoop)
 
@@ -476,9 +483,8 @@ class TestWorktreeIsolation:
         assert wt_payload["branch"].startswith("coder/subagent/")
 
     @pytest.mark.asyncio
-    async def test_clean_worktree_is_removed(self, ctx, pm, monkeypatch, stub_worktree):
+    async def test_clean_worktree_is_removed(self, ctx, monkeypatch, stub_worktree):
         """If sub-agent made no changes, worktree is removed and the report has no trailing note."""
-        ctx._pm = pm
         removes: list = []
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
         # stub_worktree already sets has_changes -> False
@@ -495,9 +501,8 @@ class TestWorktreeIsolation:
         assert "worktree" not in out.data.lower()
 
     @pytest.mark.asyncio
-    async def test_dirty_worktree_is_kept_and_reported(self, ctx, pm, monkeypatch, stub_worktree):
+    async def test_dirty_worktree_is_kept_and_reported(self, ctx, monkeypatch, stub_worktree):
         """If sub-agent made changes, worktree is preserved and path/branch appear in report."""
-        ctx._pm = pm
         monkeypatch.setattr(wt, "has_changes", lambda w: True)
         removes: list = []
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
@@ -515,9 +520,8 @@ class TestWorktreeIsolation:
         assert "preserved" in out.data.lower()
 
     @pytest.mark.asyncio
-    async def test_worktree_removed_on_subagent_exception(self, ctx, pm, monkeypatch, stub_worktree):
+    async def test_worktree_removed_on_subagent_exception(self, ctx, monkeypatch, stub_worktree):
         """Even if sub-agent raises, the worktree cleanup still runs (finally block)."""
-        ctx._pm = pm
         removes: list = []
         monkeypatch.setattr(wt, "remove_worktree", lambda w: removes.append(w))
 

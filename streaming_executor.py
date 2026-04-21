@@ -1,11 +1,12 @@
 import asyncio
 from dataclasses import dataclass, field
-from typing import AsyncGenerator
+from typing import AsyncGenerator, TYPE_CHECKING
 
 from agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
 from tools.base import Tool
-from permissions import PermissionManager
-from hooks import HookRunner, register_builtin_hooks
+
+if TYPE_CHECKING:
+    from agent_services import AgentServices
 
 
 @dataclass
@@ -24,21 +25,20 @@ class StreamingToolExecutor:
     Concurrent-safe tools run in parallel; non-safe tools block the queue.
     """
 
-    def __init__(self, tool_map: dict[str, Tool], pm: PermissionManager, context):
+    def __init__(self, tool_map: dict[str, Tool], services: "AgentServices", context):
         self._tool_map = tool_map
-        self._pm = pm
+        self._pm = services.permissions
         self._context = context
         self._tools: list[TrackedTool] = []
         self._done_event = asyncio.Event()
         self._permission_error: PermissionDeniedError | None = None
-        if context is not None and context.settings is not None:
-            hooks_dict = context.settings.hooks
-            cwd = context.cwd
-        else:
-            hooks_dict = {}
-            cwd = "."
-        self._hooks = HookRunner(hooks_dict, cwd=cwd)
-        register_builtin_hooks(self._hooks)
+        # HookRunner is owned by AgentServices; lifetime = session, not per-turn.
+        # Fall back to a no-op runner when services carries no hooks (e.g. tests).
+        hooks = services.hooks
+        if hooks is None:
+            from hooks import HookRunner
+            hooks = HookRunner({}, cwd=context.cwd if context else ".")
+        self._hooks = hooks
 
     def add_tool(self, block: ToolUseBlock):
         tool = self._tool_map.get(block.name)
