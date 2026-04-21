@@ -2,6 +2,8 @@ import argparse
 import asyncio
 import os
 import shutil
+from dotenv import load_dotenv
+from logging_config import setup_logging
 from context import AgentContext
 from agent_services import AgentServices
 from permissions import PermissionManager
@@ -248,6 +250,8 @@ def parse_args():
 
 
 async def repl():
+    load_dotenv()
+    setup_logging()  # minimal console setup before session_id is known
     args = parse_args()
     cwd = os.getcwd()
 
@@ -277,6 +281,7 @@ async def repl():
     else:
         session = SessionManager(cwd=cwd)
 
+    setup_logging(session.session_id)
     agent = make_agent(cwd, session)
 
     if resumed:

@@ -1,9 +1,9 @@
 import asyncio
+import logging
 import os
 import random
 from typing import Any, AsyncGenerator
 import anthropic
-from dotenv import load_dotenv
 from context import AgentContext
 from agent_services import AgentServices
 from streaming_executor import StreamingToolExecutor
@@ -16,7 +16,7 @@ from agent_types import (
     PermissionDeniedError,
 )
 
-load_dotenv()
+logger = logging.getLogger("coder.agent_loop")
 
 # ---------------------------------------------------------------------------
 # Retry config
@@ -118,6 +118,7 @@ class AgentLoop:
                     raise
                 jitter = random.uniform(0, 1)
                 wait = min(delay + jitter, _MAX_DELAY)
+                logger.info("rate limited, retrying in %.1fs (attempt %d/%d)", wait, attempt + 1, _MAX_RETRIES)
                 yield TextDelta(text=f"\n[Rate limited, retrying in {wait:.1f}s...]\n")
                 await asyncio.sleep(wait)
                 delay = min(delay * 2, _MAX_DELAY)
@@ -137,6 +138,7 @@ class AgentLoop:
                         yield event
             except anthropic.BadRequestError as e:
                 if "prompt is too long" in str(e).lower() or "prompt_too_long" in str(e).lower():
+                    logger.warning("prompt too long, compacting conversation")
                     yield TextDelta(text="\n[Context too long, compacting...]\n")
                     summary = await compact_conversation(
                         self.client, self.model,

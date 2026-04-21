@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, TYPE_CHECKING
 
@@ -7,6 +8,8 @@ from tools.base import Tool
 
 if TYPE_CHECKING:
     from agent_services import AgentServices
+
+logger = logging.getLogger("coder.streaming_executor")
 
 
 @dataclass
@@ -70,11 +73,13 @@ class StreamingToolExecutor:
         if tool is None:
             tracked.result = ToolResult(data=f"Unknown tool: {tracked.block.name}", is_error=True)
         elif not self._pm.is_allowed(tool, tracked.block.input):
+            logger.warning("permission denied for tool %s", tracked.block.name)
             self._permission_error = PermissionDeniedError(tracked.block.name)
             tracked.status = "completed"
             self._done_event.set()
             return
         else:
+            logger.debug("executing tool %s", tracked.block.name)
             # PreToolUse hooks
             pre = await self._hooks.run_pre_tool(tracked.block.name, tracked.block.input)
             if pre.blocked:

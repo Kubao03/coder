@@ -8,9 +8,12 @@ Two hook sources:
 import asyncio
 import inspect
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Union
+
+logger = logging.getLogger("coder.hooks")
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +120,7 @@ class HookRunner:
             )
             return proc.returncode, stdout.decode(errors="replace"), stderr.decode(errors="replace")
         except asyncio.TimeoutError:
+            logger.warning("hook command timed out after %.0fs: %s", timeout, command[:80])
             if proc is not None:
                 try:
                     proc.kill()
@@ -125,6 +129,7 @@ class HookRunner:
                     pass
             return 1, "", f"Hook timed out after {timeout}s"
         except Exception as e:
+            logger.debug("hook command error: %s", e)
             return 1, "", str(e)
 
     async def run_pre_tool(self, tool_name: str, tool_input: dict[str, Any]) -> HookResult:
@@ -166,6 +171,7 @@ class HookRunner:
             # exit code 2 → block unconditionally
             if rc == 2:
                 reason = stdout.strip() or stderr.strip() or f"Hook exited with code 2"
+                logger.info("PreToolUse hook blocked tool %s: %s", tool_name, reason[:120])
                 return HookResult(blocked=True, block_reason=reason, output="\n".join(output_parts))
 
             # Try to parse JSON from stdout
