@@ -1,4 +1,4 @@
-"""Main REPL loop and agent factory."""
+"""Main REPL loop, agent factory, and CLI entry point."""
 
 import argparse
 import asyncio
@@ -138,3 +138,8 @@ async def repl():
         except Exception as e:
             print(f"\n{RED}Error: {e}{RESET}\n")
         print(separator())
+
+
+def main_entry() -> None:
+    """Entry point for the `coder` CLI command (installed via pip/pipx)."""
+    asyncio.run(repl())

@@ -1,5 +1,5 @@
 import pytest
-from coder.agent_types import ToolResult
+from coder.tools.base import ToolResult
 from coder.tools.base import Tool
 
 

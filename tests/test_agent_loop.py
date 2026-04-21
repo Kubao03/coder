@@ -6,9 +6,8 @@ from coder.core.context import AgentContext
 from coder.permissions import PermissionManager
 from coder.persistence.settings import Settings
 from coder.hooks import HookRunner, register_builtin_hooks
-from coder.agent_types import (
-    ToolUseBlock, TextDelta, ToolUseStart, ToolExecResult, TurnComplete,
-)
+from coder.tools.base import ToolUseBlock
+from coder.core.events import TextDelta, ToolUseStart, ToolExecResult, TurnComplete
 from coder.tools.bash import BashTool
 from coder.tools.file_read import FileReadTool
 

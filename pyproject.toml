@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-coder = "coder.main:main_entry"
+coder = "coder.cli.repl:main_entry"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -3,7 +3,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from coder.core.streaming import StreamingToolExecutor, TrackedTool
-from coder.agent_types import ToolResult, ToolUseBlock, ToolExecResult, PermissionDeniedError
+from coder.tools.base import ToolResult, ToolUseBlock
+from coder.core.events import ToolExecResult
+from coder.core.errors import PermissionDeniedError
 from coder.tools.base import Tool
 
 

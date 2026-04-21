@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from coder.agent_types import ToolResult
+from coder.tools.base import ToolResult
 from coder.core.services import AgentServices
 from coder.core.context import AgentContext
 from coder.hooks import HookRunner, register_builtin_hooks
@@ -235,7 +235,7 @@ class _FakeAgentLoop:
         _FakeAgentLoop.instances.append(self)
 
     async def run_stream(self, user_message):
-        from coder.agent_types import TurnComplete
+        from coder.core.events import TurnComplete
         self.user_messages.append(user_message)
         for ev in _FakeAgentLoop.scripted_events:
             yield ev
@@ -302,7 +302,7 @@ class TestCallE2E:
     @pytest.mark.asyncio
     async def test_listener_receives_start_tool_end(self, ctx, services, monkeypatch):
         """The parent UI can watch sub-agent progress via services.subagent_listener."""
-        from coder.agent_types import ToolUseStart
+        from coder.core.events import ToolUseStart
         from dataclasses import replace
 
         events_seen: list[tuple] = []
